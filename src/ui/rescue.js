@@ -192,15 +192,26 @@ function scanResults() {
 
 function render() {
   const wallets = store.listWallets();
-  const canRescue = state.scanned && state.victim && state.funder && isPublicKey(state.destination)
+  const canRescue = state.scanned && state.victim && state.funder && state.funder !== state.victim && isPublicKey(state.destination)
     && (((state.balance ?? 0) + (state.vault ?? 0) > RENT_EXEMPT_MIN_LAMPORTS) || selectedTokens().length > 0);
 
   const victimSel = walletSelect({ selected: state.victim, allowNone: true, id: 'victim' });
   victimSel.addEventListener('change', () => { state.victim = victimSel.value || null; state.scanned = false; scan(); });
 
-  const funderSel = walletSelect({ filter: (w) => !w.compromised && w.pubkey !== state.victim, selected: state.funder, allowNone: true, id: 'funder' });
+  // A rescue needs a wallet other than the exposed one to pay the fee and tip:
+  // funding the exposed wallet instead just hands the sweeper bot the gas.
+  const funders = wallets.filter((w) => !w.compromised && w.pubkey !== state.victim);
+  if (state.funder && !funders.some((w) => w.pubkey === state.funder)) state.funder = null;
+  if (!state.funder && funders.length === 1) state.funder = funders[0].pubkey;
+
+  const funderSel = walletSelect({
+    filter: (w) => funders.some((f) => f.pubkey === w.pubkey),
+    selected: state.funder, allowNone: true, id: 'funder',
+    emptyLabel: wallets.length ? 'No other wallet to pay with' : 'No wallets in vault yet',
+  });
   funderSel.addEventListener('change', () => { state.funder = funderSel.value || null; render(); });
-  if (!state.funder && funderSel.value) state.funder = funderSel.value;
+
+  const destinationChoices = state.victim ? funders : [];
 
   mount(page,
     el('h1', { class: 'page-title' }, 'Rescue a drained wallet'),
@@ -221,16 +232,22 @@ function render() {
         el('div', { class: 'form-group' },
           el('label', { class: 'form-label', for: 'funder' }, 'Clean wallet (pays fee + tip)'),
           funderSel,
-          el('div', { class: 'form-hint' }, `Needs about ${fmt.sol(tipLamports() + 200_000)} to cover the tip and fees.`)),
+          funders.length
+            ? el('div', { class: 'form-hint' }, `Needs about ${fmt.sol(tipLamports() + 200_000)} to cover the tip and fees.`)
+            : el('div', { class: 'callout warn', style: 'margin-top:8px' },
+                'A rescue needs a second wallet to pay the fee. Funding the exposed wallet instead just hands the sweeper bot the gas. ',
+                el('a', { href: '/', class: 'green' }, 'Generate a clean wallet'),
+                ' and send it about ', fmt.sol(tipLamports() + 200_000), '.')),
         el('div', { class: 'form-group' },
           el('label', { class: 'form-label', for: 'dest' }, 'Safe destination'),
           el('input', { class: 'form-input mono', id: 'dest', placeholder: 'Address you control', value: state.destination,
             onInput: (e) => { state.destination = e.target.value.trim(); const btn = document.getElementById('rescue-btn'); if (btn) btn.disabled = !isPublicKey(state.destination) || !state.scanned; } }),
           el('div', { class: 'form-hint' }, 'A fresh wallet whose key has never been shared.'),
-          wallets.filter((w) => !w.compromised && w.pubkey !== state.victim).length
+          destinationChoices.length
             ? el('div', { class: 'row', style: 'gap:6px;margin-top:6px' },
-                wallets.filter((w) => !w.compromised && w.pubkey !== state.victim).slice(0, 3).map((w) =>
-                  el('button', { class: 'btn btn-ghost btn-sm', onClick: () => { state.destination = w.pubkey; render(); } }, w.label)))
+                el('span', { class: 'form-hint' }, 'Use:'),
+                destinationChoices.slice(0, 3).map((w) =>
+                  el('button', { type: 'button', class: 'btn btn-ghost btn-sm', onClick: () => { state.destination = w.pubkey; render(); } }, w.label)))
             : null),
         el('button', { id: 'rescue-btn', class: 'btn btn-primary btn-lg', disabled: !canRescue, onClick: rescue }, 'Rescue everything'),
         el('div', { class: 'form-hint', style: 'margin-top:10px' }, 'One bundle. Nothing partially lands.')),

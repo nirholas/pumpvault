@@ -179,13 +179,22 @@ export async function ensureUnlocked() {
   }
 }
 
-/** <select> of vault wallets. `filter(w)` narrows the list. */
-export function walletSelect({ filter = () => true, selected, allowNone = false, id } = {}) {
+/**
+ * <select> of vault wallets. `filter(w)` narrows the list. Passing `selected:
+ * null` means "nothing chosen yet" and leaves the placeholder showing, so the
+ * control never displays a wallet the page does not consider selected; omitting
+ * `selected` falls back to the active wallet.
+ */
+export function walletSelect({ filter = () => true, selected, allowNone = false, id, emptyLabel = 'No wallets in vault yet' } = {}) {
   const sel = el('select', { class: 'form-input mono', id });
   const wallets = store.listWallets().filter(filter);
-  if (allowNone || !wallets.length) sel.append(el('option', { value: '' }, wallets.length ? 'Select a wallet' : 'No wallets in vault yet'));
+  if (allowNone || !wallets.length) {
+    sel.append(el('option', { value: '' }, wallets.length ? 'Select a wallet' : emptyLabel));
+  }
+  const target = selected === undefined ? store.getActivePubkey() : selected;
   for (const w of wallets) {
-    sel.append(el('option', { value: w.pubkey, selected: w.pubkey === (selected ?? store.getActivePubkey()) }, `${w.label} · ${shortAddress(w.pubkey, 6)}${w.compromised ? ' · compromised' : ''}`));
+    sel.append(el('option', { value: w.pubkey, selected: w.pubkey === target },
+      `${w.label} · ${shortAddress(w.pubkey, 6)}${w.compromised ? ' · compromised' : ''}`));
   }
   return sel;
 }
