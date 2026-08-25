@@ -1,0 +1,56 @@
+{
+  "name": "pumpvault",
+  "version": "0.1.0",
+  "description": "Launch pump.fun coins, claim creator fees, and rescue funds from drained wallets with Jito-atomic bundles. Non-custodial: keys are generated and encrypted in the browser.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nirholas/pumpvault.git"
+  },
+  "homepage": "https://github.com/nirholas/pumpvault#readme",
+  "bugs": {
+    "url": "https://github.com/nirholas/pumpvault/issues"
+  },
+  "keywords": ["pump.fun", "solana", "jito", "creator-fees", "launchpad", "wallet"],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "pumpvault": "./cli/pumpvault.mjs"
+  },
+  "exports": {
+    ".": "./src/lib/index.js",
+    "./jito": "./src/lib/jito.js",
+    "./pump": "./src/lib/pump.js",
+    "./fees": "./src/lib/fees.js",
+    "./atomic": "./src/lib/atomic.js",
+    "./keys": "./src/lib/keys.js",
+    "./vault": "./src/lib/vault.js"
+  },
+  "files": ["src/lib", "cli", "server", "README.md", "LICENSE"],
+  "scripts": {
+    "dev": "concurrently -k -n web,api \"vite\" \"node --env-file-if-exists=.env server/index.mjs\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@pump-fun/pump-sdk": "^1.36.0",
+    "@pump-fun/pump-swap-sdk": "^1.16.0",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.2",
+    "bn.js": "^5.2.2",
+    "bs58": "^6.0.0",
+    "express": "^5.1.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "vite": "^7.0.0",
+    "vite-plugin-node-polyfills": "^0.28.0",
+    "vitest": "^3.2.4"
+  }
+}
