@@ -74,6 +74,7 @@ pump.fun sends creator fees to one of three places, and pumpvault labels each co
 - **creator** — the normal case. The creator wallet claims with `collect`.
 - **fee sharing** — the coin has a sharing config splitting fees among several shareholders. Anyone can run `distribute`, which pays every shareholder their share; the Claim page offers that instead of a claim button.
 - **cashback** — fees go back to traders. There is no creator vault, and nothing to claim.
+- **holder rewards** — protocol creator fees accrue to token holders. The creator cannot collect or distribute these fees.
 
 ## Command line
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Keypair, SystemProgram } from '@solana/web3.js';
 import { buildSignedTx, lamportsToSol, signatureOf, solToLamports } from '../src/lib/tx.js';
-import { estimateLaunchCost, validateCoinDetails } from '../src/lib/pump.js';
+import { buildCreateInstructions, estimateLaunchCost, validateCoinDetails } from '../src/lib/pump.js';
 import { pickTipAccount, tipInstruction } from '../src/lib/jito.js';
 import { JITO_TIP_ACCOUNTS_FALLBACK } from '../src/lib/constants.js';
 
@@ -87,5 +87,25 @@ describe('estimateLaunchCost', () => {
     const cost = estimateLaunchCost({ tipLamports: 1_000_000 });
     expect(cost.devBuyLamports).toBe(0);
     expect(cost.totalLamports).toBeGreaterThan(1_000_000);
+  });
+});
+
+describe('Pump V2 holder rewards', () => {
+  it('builds an offline holder-reward create instruction without a network call', async () => {
+    const { instructions } = await buildCreateInstructions({
+      mint: Keypair.generate().publicKey,
+      name: 'Holder Coin', symbol: 'HOLD', uri: 'https://example.com/metadata.json',
+      creator: payer.publicKey, user: payer.publicKey, holderReward: true,
+    });
+    expect(instructions).toHaveLength(1);
+    expect(instructions[0].data.at(-1)).toBe(1);
+  });
+
+  it('rejects incompatible launch modes before composing an instruction', async () => {
+    await expect(buildCreateInstructions({
+      mint: Keypair.generate().publicKey,
+      name: 'Holder Coin', symbol: 'HOLD', uri: 'https://example.com/metadata.json',
+      creator: payer.publicKey, user: payer.publicKey, holderReward: true, cashback: true,
+    })).rejects.toThrow(/cannot be combined/i);
   });
 });

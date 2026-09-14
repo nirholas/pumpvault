@@ -89,19 +89,22 @@ export async function fetchCoinsByCreator(creator, { apiBase = PUMP_API_BASE, fe
  * `creator` becomes the on-chain creator (earns fees); `user` pays and receives the dev buy.
  */
 export async function buildCreateInstructions({
-  connection, mint, name, symbol, uri, creator, user, devBuyLamports = 0, mayhemMode = false, cashback = false,
+  connection, mint, name, symbol, uri, creator, user, devBuyLamports = 0, mayhemMode = false, cashback = false, holderReward = false,
 }) {
+	if (holderReward && (cashback || mayhemMode)) {
+		throw new Error('Holder rewards cannot be combined with cashback or mayhem mode');
+	}
   const sdk = new OnlinePumpSdk(connection);
   if (devBuyLamports > 0) {
     const [global, feeConfig] = await Promise.all([sdk.fetchGlobal(), sdk.fetchFeeConfig()]);
     const solAmount = new BN(devBuyLamports);
     const amount = getBuyTokenAmountFromSolAmount({ global, feeConfig, mintSupply: null, bondingCurve: null, amount: solAmount });
     const instructions = await PUMP_SDK.createV2AndBuyInstructions({
-      global, mint, name, symbol, uri, creator, user, amount, solAmount, mayhemMode, cashback,
+      global, mint, name, symbol, uri, creator, user, amount, solAmount, mayhemMode, cashback, holderReward,
     });
     return { instructions, tokenAmount: BigInt(amount.toString()) };
   }
-  const ix = await PUMP_SDK.createV2Instruction({ mint, name, symbol, uri, creator, user, mayhemMode, cashback });
+  const ix = await PUMP_SDK.createV2Instruction({ mint, name, symbol, uri, creator, user, mayhemMode, cashback, holderReward });
   return { instructions: [ix], tokenAmount: 0n };
 }
 

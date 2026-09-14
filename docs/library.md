@@ -95,12 +95,12 @@ import { getCreatorVaultLamports, listCreatedCoins, getCoinFeeStatus } from 'pum
 
 await getCreatorVaultLamports(connection, creator);   // unclaimed lamports
 await listCreatedCoins({ connection, creator });      // API + on-chain scan, merged
-await getCoinFeeStatus(connection, mint);             // creator | sharing_config | cashback
+await getCoinFeeStatus(connection, mint);             // creator | sharing_config | cashback | holder_rewards
 ```
 
 `listCreatedCoins` merges pump.fun's API (rich metadata) with a `getProgramAccounts` scan of bonding curves by creator, so a coin the API has not indexed still appears. Pass `apiBase` to route the API half through a proxy.
 
-`getCoinFeeStatus` decides where fees actually go. A coin with a sharing config is claimed with `buildDistributeInstructions` and `planDistribute`, not with `collect`; a cashback coin has no creator vault at all.
+`getCoinFeeStatus` decides where fees actually go. A coin with a sharing config is claimed with `buildDistributeInstructions` and `planDistribute`, not with `collect`; cashback and holder-reward coins have no creator vault to claim.
 
 ## Full working example
 

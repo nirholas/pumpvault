@@ -213,6 +213,7 @@ function feeBadge(coin) {
     isGraduated ? el('span', { class: 'badge purple' }, 'graduated') : el('span', { class: 'badge cyan' }, 'bonding curve'),
     feeDestination === 'creator' ? el('span', { class: 'badge green' }, 'fees to you')
       : feeDestination === 'sharing_config' ? el('span', { class: 'badge yellow' }, 'fee sharing')
+      : feeDestination === 'holder_rewards' ? el('span', { class: 'badge purple' }, 'holder rewards')
       : el('span', { class: 'badge' }, 'cashback coin'));
 }
 

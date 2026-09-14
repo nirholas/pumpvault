@@ -116,6 +116,7 @@ export async function getCoinFeeStatus(connection, mint) {
   let creator = new PublicKey(bondingCurve.creator);
   let isGraduated = false;
   let isCashback = Boolean(bondingCurve.isCashbackCoin);
+	let isHolderReward = Boolean(bondingCurve.isHolderReward);
 
   const poolPda = canonicalPumpPoolPda(mintPk);
   const poolInfo = await connection.getAccountInfo(poolPda);
@@ -125,18 +126,20 @@ export async function getCoinFeeStatus(connection, mint) {
       const pool = await new OnlinePumpAmmSdk(connection).fetchPool(poolPda);
       creator = new PublicKey(pool.coinCreator);
       isCashback = isCashback || Boolean(pool.isCashbackCoin);
+		isHolderReward = isHolderReward || Boolean(pool.isHolderReward);
     } catch {
       /* pool account exists but is still migrating; bonding-curve creator stands */
     }
   }
-  const hasSharingConfig = !isCashback && hasCoinCreatorMigratedToSharingConfig({ mint: mintPk, creator });
+  const hasSharingConfig = !isCashback && !isHolderReward && hasCoinCreatorMigratedToSharingConfig({ mint: mintPk, creator });
   return {
     mint: mintPk.toBase58(),
     creator: creator.toBase58(),
     isGraduated,
     isCashback,
+		isHolderReward,
     hasSharingConfig,
-    feeDestination: isCashback ? 'cashback' : hasSharingConfig ? 'sharing_config' : 'creator',
+		feeDestination: isHolderReward ? 'holder_rewards' : isCashback ? 'cashback' : hasSharingConfig ? 'sharing_config' : 'creator',
   };
 }
 

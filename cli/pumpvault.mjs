@@ -54,7 +54,7 @@ Common options
 Launch options
   --description, --twitter, --telegram, --website
   --dev-buy <sol>      buy your own coin in the create transaction
-  --mayhem, --cashback
+  --mayhem, --holder-reward, --cashback (legacy)
   --funder-secret-env  env var holding a separate payer key (default: creator pays)
 
 Keys (base58, JSON byte array, or a path to a keypair file)
@@ -204,7 +204,7 @@ async function cmdLaunch(values) {
     buildCreateInstructions({
       connection, mint: mint.publicKey, name, symbol, uri: metadataUri,
       creator: creator.publicKey, user: creator.publicKey,
-      devBuyLamports, mayhemMode: Boolean(values.mayhem), cashback: Boolean(values.cashback),
+      devBuyLamports, mayhemMode: Boolean(values.mayhem), cashback: Boolean(values.cashback), holderReward: Boolean(values['holder-reward']),
     }),
     fetchPumpLookupTables(connection),
     resolveTipAccount(),
@@ -316,7 +316,7 @@ const { values, positionals } = parseArgs({
     description: { type: 'string' }, twitter: { type: 'string' }, telegram: { type: 'string' }, website: { type: 'string' },
     'dev-buy': { type: 'string' }, tip: { type: 'string' }, rpc: { type: 'string' },
     'funder-secret-env': { type: 'string' },
-    mayhem: { type: 'boolean' }, cashback: { type: 'boolean' }, tokens: { type: 'boolean' },
+    mayhem: { type: 'boolean' }, cashback: { type: 'boolean' }, 'holder-reward': { type: 'boolean' }, tokens: { type: 'boolean' },
     yes: { type: 'boolean', short: 'y' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   },
 });
