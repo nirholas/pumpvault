@@ -171,8 +171,4 @@ Tests cover the parts where a mistake costs money: secret-key parsing, vault enc
 - Interface built on the design language of [nirholas/solana-launchpad-ui](https://github.com/nirholas/solana-launchpad-ui).
 - On-chain work through [`@pump-fun/pump-sdk`](https://www.npmjs.com/package/@pump-fun/pump-sdk) and [`@pump-fun/pump-swap-sdk`](https://www.npmjs.com/package/@pump-fun/pump-swap-sdk).
 
-## License
 
-MIT. See [LICENSE](LICENSE).
-
-Launching a coin, claiming fees, and rescuing a wallet all move real funds on Solana mainnet and cannot be undone. Read what the confirmation dialog says before approving it.
