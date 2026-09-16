@@ -7,7 +7,7 @@ import {
   feeSharingConfigPda,
   canonicalPumpPoolPda,
   hasCoinCreatorMigratedToSharingConfig,
-} from '@pump-fun/pump-sdk';
+} from '#pump-sdk';
 import {
   OnlinePumpAmmSdk,
   coinCreatorVaultAtaPda,

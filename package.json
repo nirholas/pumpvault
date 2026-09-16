@@ -12,7 +12,14 @@
   "bugs": {
     "url": "https://github.com/nirholas/pumpvault/issues"
   },
-  "keywords": ["pump.fun", "solana", "jito", "creator-fees", "launchpad", "wallet"],
+  "keywords": [
+    "pump.fun",
+    "solana",
+    "jito",
+    "creator-fees",
+    "launchpad",
+    "wallet"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -28,7 +35,19 @@
     "./keys": "./src/lib/keys.js",
     "./vault": "./src/lib/vault.js"
   },
-  "files": ["src/lib", "cli", "server", "README.md", "LICENSE"],
+  "imports": {
+    "#pump-sdk": {
+      "node": "./src/lib/pump-sdk.node.js",
+      "default": "./src/lib/pump-sdk.js"
+    }
+  },
+  "files": [
+    "src/lib",
+    "cli",
+    "server",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "concurrently -k -n web,api \"vite\" \"node --env-file-if-exists=.env server/index.mjs\"",
     "build": "vite build",

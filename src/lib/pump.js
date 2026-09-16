@@ -1,6 +1,6 @@
 import BN from 'bn.js';
 import { Keypair, PublicKey } from '@solana/web3.js';
-import { PUMP_SDK, OnlinePumpSdk, getBuyTokenAmountFromSolAmount } from '@pump-fun/pump-sdk';
+import { PUMP_SDK, OnlinePumpSdk, getBuyTokenAmountFromSolAmount } from '#pump-sdk';
 import {
   CREATE_RENT_LAMPORTS,
   PUMP_ALT_DEVNET,
