@@ -10,9 +10,12 @@ const sdk = require('@pump-fun/pump-sdk');
 export const {
   OnlinePumpSdk,
   PUMP_SDK,
+  bondingCurvePda,
   canonicalPumpPoolPda,
+  canonicalPumpPoolPdaWithQuote,
   creatorVaultPda,
   feeSharingConfigPda,
   getBuyTokenAmountFromSolAmount,
   hasCoinCreatorMigratedToSharingConfig,
+  normalizeQuoteMint,
 } = sdk;

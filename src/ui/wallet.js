@@ -4,7 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import * as store from './store.js';
 import { getBalanceLamports, getConnection } from './rpc.js';
 import { secretKeyToBase58, secretKeyToJson, shortAddress } from '../lib/keys.js';
-import { getCreatorVaultLamports } from '../lib/fees.js';
+import { getCreatorFeeBreakdown } from '../lib/fees.js';
 import {
   coinAvatar, confirmModal, copy, el, mount, ensureUnlocked, fmt, formModal, infoModal, initShell, toast,
 } from './app.js';
@@ -104,11 +104,18 @@ function walletCard(w) {
 
   (async () => {
     const pk = new PublicKey(w.pubkey);
-    const [bal, vault] = await Promise.allSettled([getBalanceLamports(pk), getCreatorVaultLamports(getConnection(), pk)]);
+    const [bal, breakdown] = await Promise.allSettled([getBalanceLamports(pk), getCreatorFeeBreakdown(getConnection(), pk)]);
     balance.textContent = bal.status === 'fulfilled' ? fmt.sol(bal.value) : 'RPC error';
     if (bal.status === 'rejected') balance.className = 'stat-value red';
-    fees.textContent = vault.status === 'fulfilled' ? fmt.sol(vault.value) : 'unavailable';
-    if (vault.status === 'fulfilled' && vault.value > 0) fees.className = 'stat-value green';
+    if (breakdown.status === 'fulfilled') {
+      const { totalLamports, vaultLamports, waitingLamports } = breakdown.value;
+      fees.textContent = fmt.sol(totalLamports);
+      if (totalLamports > 0) fees.className = 'stat-value green';
+      // Fees from new trades wait on curves and in pools until a claim sweeps them; say so.
+      if (waitingLamports > 0) fees.title = `${fmt.sol(vaultLamports)} in your vault, ${fmt.sol(waitingLamports)} waiting on curves and pools (swept in when you claim)`;
+    } else {
+      fees.textContent = 'unavailable';
+    }
   })();
 
   return el('article', { class: `card wallet-card ${active ? 'active' : ''} fade-in` },

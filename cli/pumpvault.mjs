@@ -19,12 +19,13 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { NATIVE_MINT } from '@solana/spl-token';
 import { parseSecretKey } from '../src/lib/keys.js';
 import {
   buildCreateInstructions, estimateLaunchCost, fetchPumpLookupTables, uploadMetadata,
 } from '../src/lib/pump.js';
 import {
-  buildCollectInstructions, getCoinFeeStatus, getCreatorVaultLamports, listCreatedCoins,
+  buildCollectInstructions, getCoinFeeStatus, getCreatorFeeBreakdown, listCreatedCoins,
 } from '../src/lib/fees.js';
 import {
   executePlan, listTokenAccounts, mergePlans, planCollect, planDrainSol, planLaunch, planRescueTokens, resolveTipAccount,
@@ -38,8 +39,8 @@ const HELP = `pumpvault: launch pump.fun coins, claim creator fees, rescue expos
 
 Commands
   balance   --wallet <pubkey>            SOL balance and unclaimed creator fees
-  coins     --creator <pubkey>           coins a wallet launched, with fee routing
-  fees      --creator <pubkey>           unclaimed creator fees, in lamports and SOL
+  coins     --creator <pubkey>           coins a wallet launched, with fee routing and waiting fees
+  fees      --creator <pubkey>           unclaimed creator fees: vault, waiting on curves, waiting in pools
   launch    --name --symbol --image      launch a coin (needs CREATOR_SECRET)
   claim     [--to <pubkey>]              collect creator fees (needs CREATOR_SECRET)
   rescue    --to <pubkey> [--tokens]     empty an exposed wallet (needs VICTIM_SECRET + FUNDER_SECRET)
@@ -54,7 +55,7 @@ Common options
 Launch options
   --description, --twitter, --telegram, --website
   --dev-buy <sol>      buy your own coin in the create transaction
-  --mayhem, --holder-reward, --cashback (legacy)
+  --mayhem, --holder-reward   (one or the other; pump.fun no longer creates cashback coins)
   --funder-secret-env  env var holding a separate payer key (default: creator pays)
 
 Keys (base58, JSON byte array, or a path to a keypair file)
@@ -133,12 +134,30 @@ async function run(connection, plan, label) {
 async function cmdBalance(values) {
   const connection = connect(values);
   const wallet = new PublicKey(values.wallet ?? fail('--wallet is required'));
-  const [balance, vault] = await Promise.all([
+  const [balance, fees] = await Promise.all([
     connection.getBalance(wallet, 'confirmed'),
-    getCreatorVaultLamports(connection, wallet),
+    getCreatorFeeBreakdown(connection, wallet),
   ]);
-  emit({ wallet: wallet.toBase58(), balanceLamports: balance, unclaimedFeeLamports: vault });
-  say(`${wallet.toBase58()}\n  balance:         ${sol(balance)}\n  unclaimed fees:  ${sol(vault)}`);
+  emit({ wallet: wallet.toBase58(), balanceLamports: balance, ...feeFields(fees) });
+  say(`${wallet.toBase58()}\n  balance:         ${sol(balance)}\n  unclaimed fees:  ${sol(fees.totalLamports)}`);
+  sayBreakdown(fees);
+}
+
+/** JSON fields for a fee breakdown. `unclaimedFeeLamports` is what a claim pays, waiting fees included. */
+function feeFields(fees) {
+  return {
+    unclaimedFeeLamports: fees.totalLamports,
+    vaultFeeLamports: fees.vaultLamports,
+    waitingCurveFeeLamports: fees.curveLamports,
+    waitingPoolFeeLamports: fees.poolLamports,
+  };
+}
+
+function sayBreakdown(fees) {
+  say(`    in vault:                  ${sol(fees.vaultLamports)}`);
+  say(`    waiting on curves:         ${sol(fees.curveLamports)}`);
+  say(`    waiting in PumpSwap pools: ${sol(fees.poolLamports)}`);
+  if (fees.waitingLamports > 0) say('    (waiting fees are swept into the vault by the claim, in the same bundle)');
 }
 
 async function cmdCoins(values) {
@@ -148,22 +167,34 @@ async function cmdCoins(values) {
   const rows = [];
   for (const coin of coins) {
     const status = await getCoinFeeStatus(connection, coin.mint).catch(() => null);
-    rows.push({ ...coin, feeDestination: status?.feeDestination ?? 'unknown', isGraduated: status?.isGraduated ?? coin.complete });
+    rows.push({
+      ...coin,
+      feeDestination: status?.feeDestination ?? 'unknown',
+      isGraduated: status?.isGraduated ?? coin.complete,
+      quoteMint: status?.quoteMint ?? null,
+      waitingCurveFee: status?.waitingCurveFee ?? null,
+      waitingPoolFee: status?.waitingPoolFee ?? null,
+    });
   }
   emit({ creator: creator.toBase58(), coins: rows });
   if (!rows.length) return say('No coins found for this wallet.');
   say(`${rows.length} coin(s) launched by ${creator.toBase58()}:`);
   for (const c of rows) {
-    say(`  ${c.mint}  ${(c.symbol || '?').padEnd(10)} ${c.isGraduated ? 'graduated' : 'bonding  '}  fees -> ${c.feeDestination}`);
+    const waiting = (c.waitingCurveFee ?? 0) + (c.waitingPoolFee ?? 0);
+    const waitingNote = !waiting ? ''
+      : c.quoteMint === NATIVE_MINT.toBase58() ? `  ${sol(waiting)} waiting to sweep`
+      : `  ${waiting} base units of ${c.quoteMint} waiting to sweep`;
+    say(`  ${c.mint}  ${(c.symbol || '?').padEnd(10)} ${c.isGraduated ? 'graduated' : 'bonding  '}  fees -> ${c.feeDestination}${waitingNote}`);
   }
 }
 
 async function cmdFees(values) {
   const connection = connect(values);
   const creator = new PublicKey(values.creator ?? fail('--creator is required'));
-  const lamports = await getCreatorVaultLamports(connection, creator);
-  emit({ creator: creator.toBase58(), unclaimedFeeLamports: lamports, unclaimedFeeSol: lamportsToSol(lamports, 9) });
-  say(`${sol(lamports)} unclaimed by ${creator.toBase58()}`);
+  const fees = await getCreatorFeeBreakdown(connection, creator);
+  emit({ creator: creator.toBase58(), ...feeFields(fees), unclaimedFeeSol: lamportsToSol(fees.totalLamports, 9) });
+  say(`${sol(fees.totalLamports)} unclaimed by ${creator.toBase58()}`);
+  sayBreakdown(fees);
 }
 
 async function cmdLaunch(values) {
@@ -204,7 +235,7 @@ async function cmdLaunch(values) {
     buildCreateInstructions({
       connection, mint: mint.publicKey, name, symbol, uri: metadataUri,
       creator: creator.publicKey, user: creator.publicKey,
-      devBuyLamports, mayhemMode: Boolean(values.mayhem), cashback: Boolean(values.cashback), holderReward: Boolean(values['holder-reward']),
+      devBuyLamports, mayhemMode: Boolean(values.mayhem), holderReward: Boolean(values['holder-reward']),
     }),
     fetchPumpLookupTables(connection),
     resolveTipAccount(),
@@ -226,26 +257,42 @@ async function cmdClaim(values) {
   const destination = values.to ?? null;
   const tipLamports = values.tip ? solToLamports(values.tip) : DEFAULT_LAUNCH_TIP_LAMPORTS;
 
-  const [vault, creatorBalance] = await Promise.all([
-    getCreatorVaultLamports(connection, creator.publicKey),
+  const [fees, creatorBalance] = await Promise.all([
+    getCreatorFeeBreakdown(connection, creator.publicKey),
     connection.getBalance(creator.publicKey, 'confirmed'),
   ]);
-  if (vault <= 0) return say('Nothing to claim.');
+  if (fees.totalLamports <= 0) return say('Nothing to claim.');
 
-  say(`Claiming ${sol(vault)} for ${creator.publicKey.toBase58()}`);
+  say(`Claiming ${sol(fees.totalLamports)} for ${creator.publicKey.toBase58()}`);
+  sayBreakdown(fees);
   if (destination) say(`  forwarding to ${destination} in the same transaction`);
   if (!(await confirm('Claim now?', values.yes))) return say('Cancelled.');
 
-  const [collectInstructions, tipAccount] = await Promise.all([
+  const [claim, tipAccount, lookupTables] = await Promise.all([
     buildCollectInstructions(connection, creator.publicKey, funder.publicKey),
     resolveTipAccount(),
+    fetchPumpLookupTables(connection),
   ]);
   const plan = planCollect({
-    funder, creator, destination, collectInstructions,
-    vaultLamports: vault, creatorBalanceLamports: creatorBalance, tipLamports, tipAccount,
+    ...claim, funder, creator, destination, lookupTables,
+    creatorBalanceLamports: creatorBalance, tipLamports, tipAccount,
   });
-  const result = await run(connection, plan, `Claimed ${sol(vault)}.`);
-  emit({ claimedLamports: vault, destination: plan.summary.destination, ...result });
+  sayDeferred(plan.summary);
+  const result = await run(connection, plan, `Claimed ${sol(plan.summary.claimLamports)}.`);
+  emit({
+    claimedLamports: plan.summary.claimLamports,
+    sweptLamports: plan.summary.sweptLamports,
+    deferredSweeps: plan.summary.deferredSweeps,
+    destination: plan.summary.destination,
+    ...result,
+  });
+}
+
+/** Waiting buckets a claim could not fit in one bundle stay where they are for the next claim. */
+function sayDeferred(summary) {
+  const left = [...summary.deferredSweeps, ...summary.unsweepable];
+  if (!left.length) return;
+  say(`  ${left.length} waiting fee bucket(s) (${sol(left.reduce((t, r) => t + r.lamports, 0))}) do not fit in this bundle; run the claim again to sweep them.`);
 }
 
 async function cmdRescue(values) {
@@ -257,15 +304,19 @@ async function cmdRescue(values) {
 
   if (victim.publicKey.equals(funder.publicKey)) fail('FUNDER_SECRET must be a different wallet from VICTIM_SECRET.');
 
-  const [balance, vault, tokens] = await Promise.all([
+  const [balance, fees, heldTokens] = await Promise.all([
     connection.getBalance(victim.publicKey, 'confirmed'),
-    getCreatorVaultLamports(connection, victim.publicKey),
+    getCreatorFeeBreakdown(connection, victim.publicKey),
     values.tokens ? listTokenAccounts(connection, victim.publicKey) : Promise.resolve([]),
   ]);
+  const vault = fees.totalLamports;
+  // A claim unwraps the wallet's wSOL into SOL that the drain moves, so wSOL is not sent as a token too.
+  const tokens = vault > 0 ? heldTokens.filter((t) => t.mint !== NATIVE_MINT.toBase58()) : heldTokens;
 
   say(`Rescuing ${victim.publicKey.toBase58()}`);
   say(`  balance:        ${sol(balance)}`);
   say(`  unclaimed fees: ${sol(vault)}`);
+  if (vault > 0) sayBreakdown(fees);
   say(`  tokens:         ${tokens.length}`);
   say(`  destination:    ${destination}`);
   say(`  paid by:        ${funder.publicKey.toBase58()}`);
@@ -280,12 +331,18 @@ async function cmdRescue(values) {
   const takeTip = () => { const t = tip; tip = 0; return t; };
 
   if (vault > 0) {
-    const collectInstructions = await buildCollectInstructions(connection, victim.publicKey, funder.publicKey);
-    plans.push(planCollect({
-      funder, creator: victim, destination, collectInstructions,
-      vaultLamports: vault, creatorBalanceLamports: balance,
+    const [claim, lookupTables] = await Promise.all([
+      buildCollectInstructions(connection, victim.publicKey, funder.publicKey),
+      fetchPumpLookupTables(connection),
+    ]);
+    const collectPlan = planCollect({
+      ...claim, funder, creator: victim, destination, creatorBalanceLamports: balance, lookupTables,
+      // Token transfers take 3 per transaction; sweeps get whatever bundle room is left.
+      maxTxs: 5 - Math.ceil(tokens.length / 3),
       tipLamports: takeTip(), tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
-    }));
+    });
+    sayDeferred(collectPlan.summary);
+    plans.push(collectPlan);
   } else if (movesSol) {
     plans.push(planDrainSol({
       funder, from: victim, destination, balanceLamports: balance,
@@ -316,7 +373,7 @@ const { values, positionals } = parseArgs({
     description: { type: 'string' }, twitter: { type: 'string' }, telegram: { type: 'string' }, website: { type: 'string' },
     'dev-buy': { type: 'string' }, tip: { type: 'string' }, rpc: { type: 'string' },
     'funder-secret-env': { type: 'string' },
-    mayhem: { type: 'boolean' }, cashback: { type: 'boolean' }, 'holder-reward': { type: 'boolean' }, tokens: { type: 'boolean' },
+    mayhem: { type: 'boolean' }, 'holder-reward': { type: 'boolean' }, tokens: { type: 'boolean' },
     yes: { type: 'boolean', short: 'y' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   },
 });

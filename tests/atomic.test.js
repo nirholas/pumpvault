@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Keypair, SystemProgram, TransactionInstruction } from '@solana/web3.js';
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { ASSOCIATED_TOKEN_PROGRAM_ID, NATIVE_MINT, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import {
-  mergePlans, planCollect, planDrainSol, planLaunch, planRescueTokens,
+  mergePlans, networkFeeLamports, planCollect, planDistribute, planDrainSol, planLaunch, planRescueTokens,
 } from '../src/lib/atomic.js';
-import { RENT_EXEMPT_MIN_LAMPORTS } from '../src/lib/constants.js';
+import { CU_COLLECT, CU_SWEEP, MAX_TX_BYTES, RENT_EXEMPT_MIN_LAMPORTS } from '../src/lib/constants.js';
+import { PUMP_SDK } from '../src/lib/pump-sdk.node.js';
+import { buildSignedTx } from '../src/lib/tx.js';
 
 const funder = Keypair.generate();
 const creator = Keypair.generate();
@@ -102,7 +104,8 @@ describe('planCollect', () => {
     const plan = planCollect({ ...base, funder: creator, destination });
     const drain = transfersIn(plan.txs[0]).find((t) => t.to === destination.toBase58());
     expect(drain.lamports).toBeLessThan(2_000_000 + 5_000_000 - RENT_EXEMPT_MIN_LAMPORTS);
-    expect(drain.lamports).toBe(2_000_000 + 5_000_000 - RENT_EXEMPT_MIN_LAMPORTS - TIP - 100_000);
+    // Network fee: one 5000-lamport signature plus 200k CU at 500k micro-lamports per CU.
+    expect(drain.lamports).toBe(2_000_000 + 5_000_000 - RENT_EXEMPT_MIN_LAMPORTS - TIP - 105_000);
   });
 
   it('signs once when the funder and creator are the same wallet', () => {
@@ -113,6 +116,145 @@ describe('planCollect', () => {
   it('refuses when the vault cannot even cover the rent-exempt buffer', () => {
     expect(() => planCollect({ ...base, vaultLamports: 0, creatorBalanceLamports: 1000, destination }))
       .toThrow(/Nothing to move/);
+  });
+});
+
+/** A real `sweep_creator_fee` for a fresh coin and creator: 13 accounts, none shared with another sweep. */
+async function curveSweep(lamports, payer = funder.publicKey) {
+  const mintKey = Keypair.generate().publicKey;
+  const instruction = await PUMP_SDK.sweepCreatorFeeInstruction({
+    payer, mint: mintKey, creator: Keypair.generate().publicKey, quoteMint: NATIVE_MINT,
+  });
+  return { venue: 'curve', mint: mintKey.toBase58(), address: Keypair.generate().publicKey.toBase58(), lamports, instruction };
+}
+
+const signsAndFits = (tx) => buildSignedTx({ ...tx, blockhash: '11111111111111111111111111111111' });
+const isTip = (t) => t.to === tipAccount.toBase58();
+
+describe('planCollect with waiting creator fees', () => {
+  // The SDK collect is signed by the creator, so the stand-in is too.
+  const collectIx = new TransactionInstruction({
+    keys: [{ pubkey: creator.publicKey, isSigner: true, isWritable: true }],
+    programId: Keypair.generate().publicKey,
+    data: Buffer.alloc(8),
+  });
+  const base = {
+    funder, creator, collectInstructions: [collectIx],
+    vaultLamports: 5_000_000, creatorBalanceLamports: 2_000_000, tipLamports: TIP, tipAccount,
+  };
+
+  it('sweeps before it collects, in the claim transaction, largest bucket first', async () => {
+    const sweeps = [await curveSweep(3_000), await curveSweep(9_000)];
+    const plan = planCollect({ ...base, sweeps });
+    expect(plan.txs).toHaveLength(1);
+    const ixs = plan.txs[0].instructions;
+    const collectAt = ixs.indexOf(base.collectInstructions[0]);
+    expect(ixs.indexOf(sweeps[1].instruction)).toBeLessThan(ixs.indexOf(sweeps[0].instruction));
+    expect(ixs.indexOf(sweeps[0].instruction)).toBeLessThan(collectAt);
+    expect(plan.summary.sweptLamports).toBe(12_000);
+    expect(plan.summary.claimLamports).toBe(5_000_000 + 12_000);
+    expect(plan.summary.deferredSweeps).toHaveLength(0);
+  });
+
+  it('forwards the swept fees too, so nothing a sweep pays in is left behind', async () => {
+    const sweeps = [await curveSweep(4_000_000)];
+    const plan = planCollect({ ...base, sweeps, destination, vaultTopUpLamports: 0 });
+    const drain = transfersIn(plan.txs[0]).find((t) => t.to === destination.toBase58());
+    expect(drain.lamports).toBe(2_000_000 + 5_000_000 + 4_000_000 - RENT_EXEMPT_MIN_LAMPORTS);
+  });
+
+  it('holds back the vault rent top-up a curve sweep may cost, but not for pool-only sweeps', async () => {
+    const curve = await curveSweep(4_000_000);
+    const pool = { ...(await curveSweep(4_000_000)), venue: 'pool' };
+    const withCurve = planCollect({ ...base, sweeps: [curve], destination, vaultTopUpLamports: RENT_EXEMPT_MIN_LAMPORTS });
+    const poolOnly = planCollect({ ...base, sweeps: [pool], destination, vaultTopUpLamports: RENT_EXEMPT_MIN_LAMPORTS });
+    expect(poolOnly.summary.drainLamports - withCurve.summary.drainLamports).toBe(RENT_EXEMPT_MIN_LAMPORTS);
+    expect(withCurve.summary.vaultTopUpLamports).toBe(RENT_EXEMPT_MIN_LAMPORTS);
+    expect(poolOnly.summary.vaultTopUpLamports).toBe(0);
+  });
+
+  it('counts the unwrapped PumpSwap wSOL when someone else pays, and the rent and fees when the creator pays', async () => {
+    const sweeps = [await curveSweep(1_000_000)];
+    const funded = planCollect({ ...base, sweeps, destination, unwrapLamports: 2_039_280, ataRentLamports: 2_039_280 });
+    expect(funded.summary.drainLamports).toBe(2_000_000 + 5_000_000 + 1_000_000 + 2_039_280 - RENT_EXEMPT_MIN_LAMPORTS);
+    const self = planCollect({
+      ...base, funder: creator, sweeps: [await curveSweep(1_000_000, creator.publicKey)], destination,
+      unwrapLamports: 2_039_280, ataRentLamports: 2_039_280,
+    });
+    const fee = networkFeeLamports({ units: CU_COLLECT + CU_SWEEP });
+    expect(self.summary.drainLamports).toBe(2_000_000 + 5_000_000 + 1_000_000 - RENT_EXEMPT_MIN_LAMPORTS - TIP - fee - 2_039_280);
+  });
+
+  it('moves sweeps that do not fit into earlier transactions, tipping once, and every transaction fits', async () => {
+    const sweeps = await Promise.all(Array.from({ length: 12 }, (_, i) => curveSweep(1_000 * (i + 1))));
+    const plan = planCollect({ ...base, sweeps, destination });
+    expect(plan.txs.length).toBeGreaterThan(1);
+    expect(plan.txs.length).toBeLessThanOrEqual(5);
+    for (const tx of plan.txs) expect(() => signsAndFits(tx)).not.toThrow();
+    const tips = plan.txs.flatMap((tx) => transfersIn(tx).filter(isTip));
+    expect(tips).toHaveLength(1);
+    expect(transfersIn(plan.txs[0]).some(isTip)).toBe(true);
+    const claim = plan.txs.at(-1);
+    expect(claim.label).toBe('collect fees');
+    expect(claim.simulate).toBe(false);
+    expect(plan.txs.slice(0, -1).every((tx) => tx.simulate && tx.signers.length === 1)).toBe(true);
+    const placed = plan.summary.sweeps.length + plan.summary.deferredSweeps.length;
+    expect(placed).toBe(12);
+    expect(plan.summary.sweptLamports + plan.summary.deferredLamports).toBe(78_000);
+  });
+
+  it('defers what does not fit in the bundle room it is given, keeping the largest buckets', async () => {
+    const sweeps = await Promise.all(Array.from({ length: 12 }, (_, i) => curveSweep(1_000 * (i + 1))));
+    const plan = planCollect({ ...base, sweeps, maxTxs: 1 });
+    expect(plan.txs).toHaveLength(1);
+    expect(plan.summary.deferredSweeps.length).toBeGreaterThan(0);
+    const smallestSwept = Math.min(...plan.summary.sweeps.map((s) => s.lamports));
+    const largestDeferred = Math.max(...plan.summary.deferredSweeps.map((s) => s.lamports));
+    expect(smallestSwept).toBeGreaterThan(largestDeferred);
+    expect(() => signsAndFits(plan.txs[0])).not.toThrow();
+  });
+
+  it('refuses a claim with no room left in the bundle', () => {
+    expect(() => planCollect({ ...base, maxTxs: 0 })).toThrow(/No room/);
+  });
+});
+
+describe('planDistribute', () => {
+  const base = { funder, mint: mint.publicKey, vaultLamports: 1_000_000, tipLamports: TIP, tipAccount };
+
+  it('keeps the SDK sweeps ahead of the distribute in one transaction when it fits', async () => {
+    const sweep = await curveSweep(5_000);
+    const plan = planDistribute({ ...base, distributeInstructions: [sweep.instruction, dummyIx()], sweepCount: 1 });
+    expect(plan.txs).toHaveLength(1);
+    expect(plan.txs[0].simulate).toBe(true);
+    expect(plan.summary.sweepCount).toBe(1);
+  });
+
+  it('splits the sweeps into a transaction ahead of the distribute when they do not fit together', async () => {
+    const sweeps = await Promise.all([curveSweep(1), curveSweep(2)]);
+    const wide = new TransactionInstruction({
+      keys: Array.from({ length: 20 }, () => ({ pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true })),
+      programId: Keypair.generate().publicKey,
+      data: Buffer.alloc(8),
+    });
+    const plan = planDistribute({ ...base, distributeInstructions: [...sweeps.map((s) => s.instruction), wide], sweepCount: 2 });
+    expect(plan.txs).toHaveLength(2);
+    expect(plan.txs[0].instructions).toContain(sweeps[0].instruction);
+    expect(plan.txs[1].instructions).toContain(wide);
+    expect(plan.txs[1].simulate).toBe(false);
+    expect(transfersIn(plan.txs[0]).some(isTip)).toBe(true);
+    for (const tx of plan.txs) expect(() => signsAndFits(tx)).not.toThrow();
+  });
+});
+
+describe('networkFeeLamports', () => {
+  it('charges the base fee per signature plus the priority fee on the CU limit', () => {
+    expect(networkFeeLamports({ units: 200_000, priorityMicroLamports: 500_000 })).toBe(105_000);
+    expect(networkFeeLamports({ units: 1, signatures: 2, priorityMicroLamports: 1 })).toBe(10_001);
+  });
+
+  it('keeps the max tx size in view', () => {
+    expect(MAX_TX_BYTES).toBe(1232);
   });
 });
 

@@ -5,9 +5,11 @@
  * funder pays the fee and tip, and the compromised wallet only ever signs.
  */
 import { PublicKey } from '@solana/web3.js';
+import { NATIVE_MINT } from '@solana/spl-token';
 import * as store from './store.js';
 import { getBalanceLamports, getConnection } from './rpc.js';
-import { getCreatorVaultLamports, buildCollectInstructions } from '../lib/fees.js';
+import { buildCollectInstructions, getCreatorFeeBreakdown } from '../lib/fees.js';
+import { fetchPumpLookupTables } from '../lib/pump.js';
 import {
   executePlan, listTokenAccounts, mergePlans, planCollect, planDrainSol, planRescueTokens, resolveTipAccount,
 } from '../lib/atomic.js';
@@ -23,11 +25,13 @@ const page = document.getElementById('page');
 
 const state = {
   victim: null, funder: null, destination: '',
-  balance: null, vault: null, tokens: [], selected: new Set(),
+  // `fees` is the creator-fee breakdown: the vaults plus what still waits on curves and in pools.
+  balance: null, fees: null, tokens: [], selected: new Set(),
   loading: false, error: null, scanned: false,
 };
 
 const tipLamports = () => solToLamports(store.getSettings().rescueTipSol);
+const feesTotal = () => state.fees?.totalLamports ?? 0;
 
 async function scan() {
   if (!state.victim) return;
@@ -36,16 +40,16 @@ async function scan() {
   render();
   const connection = getConnection();
   const victim = new PublicKey(state.victim);
-  const [balance, vault, tokens] = await Promise.allSettled([
+  const [balance, fees, tokens] = await Promise.allSettled([
     getBalanceLamports(victim),
-    getCreatorVaultLamports(connection, victim),
+    getCreatorFeeBreakdown(connection, victim),
     listTokenAccounts(connection, victim),
   ]);
   state.balance = balance.status === 'fulfilled' ? balance.value : null;
-  state.vault = vault.status === 'fulfilled' ? vault.value : null;
+  state.fees = fees.status === 'fulfilled' ? fees.value : null;
   state.tokens = tokens.status === 'fulfilled' ? tokens.value : [];
   state.selected = new Set(state.tokens.map((t) => t.mint));
-  state.error = [balance, vault, tokens].filter((r) => r.status === 'rejected').map((r) => r.reason.message)[0] ?? null;
+  state.error = [balance, fees, tokens].filter((r) => r.status === 'rejected').map((r) => r.reason.message)[0] ?? null;
   state.loading = false;
   state.scanned = true;
   render();
@@ -63,10 +67,12 @@ async function rescue() {
 
   const victimKp = store.getKeypair(state.victim);
   const funderKp = store.getKeypair(state.funder);
-  const tokens = selectedTokens();
-  const vault = state.vault ?? 0;
+  const vault = feesTotal();
   const balance = state.balance ?? 0;
   const hasSol = balance > RENT_EXEMPT_MIN_LAMPORTS || vault > 0;
+  // The claim unwraps the wallet's wSOL into SOL and drains it with the rest, so a wSOL
+  // transfer in the same bundle would hit a closed account.
+  const tokens = vault > 0 ? selectedTokens().filter((t) => t.mint !== NATIVE_MINT.toBase58()) : selectedTokens();
   if (!hasSol && !tokens.length) return toast('Nothing left to rescue in this wallet', 'err');
 
   const tip = tipLamports();
@@ -78,6 +84,9 @@ async function rescue() {
       ['Destination', state.destination],
       ['Fee + tip paid by', state.funder],
       vault > 0 ? ['Creator fees collected', fmt.sol(vault)] : null,
+      state.fees?.waitingLamports > 0
+        ? ['Of which swept in first', `${fmt.sol(state.fees.waitingLamports)} waiting on curves and pools`]
+        : null,
       hasSol ? ['SOL moved', fmt.sol(Math.max(0, balance + vault - RENT_EXEMPT_MIN_LAMPORTS))] : null,
       tokens.length ? ['Token types moved', String(tokens.length)] : null,
       ['Jito tip', fmt.sol(tip)],
@@ -106,10 +115,16 @@ async function rescue() {
     const takeTip = () => { const t = tipForNext; tipForNext = 0; return t; };
 
     if (vault > 0) {
-      const collectInstructions = await buildCollectInstructions(connection, state.victim, state.funder);
+      const [claim, lookupTables] = await Promise.all([
+        buildCollectInstructions(connection, state.victim, state.funder),
+        fetchPumpLookupTables(connection, { cluster: store.getSettings().cluster }),
+      ]);
       plans.push(planCollect({
+        ...claim,
         funder: funderKp, creator: victimKp, destination: state.destination,
-        collectInstructions, vaultLamports: vault, creatorBalanceLamports: balance,
+        creatorBalanceLamports: balance, lookupTables,
+        // Token transfers take 3 per transaction; sweeps get whatever bundle room is left.
+        maxTxs: 5 - Math.ceil(tokens.length / 3),
         tipLamports: takeTip(), tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
         priorityMicroLamports: store.getSettings().priorityMicroLamports,
       }));
@@ -139,8 +154,12 @@ async function rescue() {
       },
     });
 
+    const collect = plans.find((p) => p.summary.kind === 'collect')?.summary;
+    const leftBehind = collect ? collect.deferredSweeps.length + collect.unsweepable.length : 0;
     progress.done(el('div', { class: 'stack', style: 'gap:12px' },
       el('div', { class: 'callout ok' }, `Rescued to ${shortAddress(state.destination, 6)}. Stop using the compromised key: anything sent to it later is still exposed.`),
+      leftBehind ? el('div', { class: 'callout warn' },
+        `${leftBehind} small creator-fee ${leftBehind === 1 ? 'bucket' : 'buckets'} did not fit in this bundle. Rescue again (with fewer tokens selected) to sweep ${leftBehind === 1 ? 'it' : 'them'} out too.`) : null,
       explorerLinks({ signatures, bundleId })));
     toast('Rescue confirmed');
     scan();
@@ -169,17 +188,21 @@ function scanResults() {
       el('h3', {}, 'Nothing scanned yet'),
       el('p', {}, 'Pick the compromised wallet and scan it to see what can still be saved.'));
   }
-  const sol = Math.max(0, (state.balance ?? 0) + (state.vault ?? 0) - RENT_EXEMPT_MIN_LAMPORTS);
+  const sol = Math.max(0, (state.balance ?? 0) + feesTotal() - RENT_EXEMPT_MIN_LAMPORTS);
   const nothing = sol <= 0 && !state.tokens.length;
   return el('div', { class: 'stack', style: 'gap:16px' },
     state.error ? el('div', { class: 'callout danger' }, state.error) : null,
     el('div', { class: 'grid grid-2' },
       el('div', { class: 'card' }, el('div', { class: 'stat' },
         el('span', { class: 'stat-label' }, 'SOL balance'),
-        el('span', { class: 'stat-value' }, state.balance == null ? '—' : fmt.sol(state.balance)))),
+        el('span', { class: 'stat-value' }, state.balance == null ? 'unknown' : fmt.sol(state.balance)))),
       el('div', { class: 'card' }, el('div', { class: 'stat' },
         el('span', { class: 'stat-label' }, 'Unclaimed creator fees'),
-        el('span', { class: `stat-value ${state.vault ? 'green' : ''}` }, state.vault == null ? '—' : fmt.sol(state.vault))))),
+        el('span', { class: `stat-value ${feesTotal() ? 'green' : ''}` }, state.fees == null ? 'unknown' : fmt.sol(feesTotal())),
+        state.fees?.waitingLamports > 0
+          ? el('span', { class: 'stat-label', style: 'margin-top:6px' },
+              `Includes ${fmt.sol(state.fees.waitingLamports)} waiting on curves and pools, swept in by the rescue`)
+          : null))),
     el('div', { class: 'card' },
       el('div', { class: 'card-title' }, 'Tokens', state.tokens.length ? el('span', { class: 'badge' }, String(state.tokens.length)) : null),
       state.tokens.length
@@ -193,7 +216,7 @@ function scanResults() {
 function render() {
   const wallets = store.listWallets();
   const canRescue = state.scanned && state.victim && state.funder && state.funder !== state.victim && isPublicKey(state.destination)
-    && (((state.balance ?? 0) + (state.vault ?? 0) > RENT_EXEMPT_MIN_LAMPORTS) || selectedTokens().length > 0);
+    && (((state.balance ?? 0) + feesTotal() > RENT_EXEMPT_MIN_LAMPORTS) || selectedTokens().length > 0);
 
   const victimSel = walletSelect({ selected: state.victim, allowNone: true, id: 'victim' });
   victimSel.addEventListener('change', () => { state.victim = victimSel.value || null; state.scanned = false; scan(); });

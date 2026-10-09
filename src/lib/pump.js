@@ -1,5 +1,6 @@
 import BN from 'bn.js';
 import { Keypair, PublicKey } from '@solana/web3.js';
+import { NATIVE_MINT } from '@solana/spl-token';
 import { PUMP_SDK, OnlinePumpSdk, getBuyTokenAmountFromSolAmount } from '#pump-sdk';
 import {
   CREATE_RENT_LAMPORTS,
@@ -87,28 +88,35 @@ export async function fetchCoinsByCreator(creator, { apiBase = PUMP_API_BASE, fe
 /**
  * Build the on-chain create (and optional first buy) instructions.
  * `creator` becomes the on-chain creator (earns fees); `user` pays and receives the dev buy.
+ * The coin is paired with SOL. Cashback coins can no longer be created (pump error 6082),
+ * so `cashback: true` is refused up front instead of failing on chain.
  */
 export async function buildCreateInstructions({
   connection, mint, name, symbol, uri, creator, user, devBuyLamports = 0, mayhemMode = false, cashback = false, holderReward = false,
 }) {
-	if (holderReward && (cashback || mayhemMode)) {
-		throw new Error('Holder rewards cannot be combined with cashback or mayhem mode');
-	}
+  if (cashback) {
+    throw new Error('pump.fun no longer creates cashback coins (program error 6082). Launch without cashback.');
+  }
+  if (holderReward && mayhemMode) {
+    throw new Error('Holder rewards cannot be combined with mayhem mode');
+  }
   const sdk = new OnlinePumpSdk(connection);
   if (devBuyLamports > 0) {
     const [global, feeConfig] = await Promise.all([sdk.fetchGlobal(), sdk.fetchFeeConfig()]);
     const solAmount = new BN(devBuyLamports);
-    const amount = getBuyTokenAmountFromSolAmount({ global, feeConfig, mintSupply: null, bondingCurve: null, amount: solAmount });
+    const amount = getBuyTokenAmountFromSolAmount({
+      global, feeConfig, mintSupply: null, bondingCurve: null, amount: solAmount, quoteMint: NATIVE_MINT,
+    });
     const instructions = await PUMP_SDK.createV2AndBuyInstructions({
-      global, mint, name, symbol, uri, creator, user, amount, solAmount, mayhemMode, cashback, holderReward,
+      global, mint, name, symbol, uri, creator, user, amount, solAmount, mayhemMode, holderReward,
     });
     return { instructions, tokenAmount: BigInt(amount.toString()) };
   }
-  const ix = await PUMP_SDK.createV2Instruction({ mint, name, symbol, uri, creator, user, mayhemMode, cashback, holderReward });
+  const ix = await PUMP_SDK.createV2Instruction({ mint, name, symbol, uri, creator, user, mayhemMode, holderReward });
   return { instructions: [ix], tokenAmount: 0n };
 }
 
-/** pump.fun's published ALT keeps create+buy under the 1232-byte limit. */
+/** pump.fun's published ALT keeps create+buy, and claims with several fee sweeps, under the 1232-byte limit. */
 export async function fetchPumpLookupTables(connection, { cluster = 'mainnet' } = {}) {
   const address = cluster === 'devnet' ? PUMP_ALT_DEVNET : PUMP_ALT_MAINNET;
   const alt = await connection.getAddressLookupTable(address);

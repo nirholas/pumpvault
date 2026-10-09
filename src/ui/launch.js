@@ -26,7 +26,7 @@ const state = {
 const form = {
   name: '', symbol: '', description: '',
   twitter: '', telegram: '', website: '',
-  devBuySol: '0', mayhemMode: false, cashback: false, holderReward: false,
+  devBuySol: '0', mayhemMode: false, holderReward: false,
   separateCreator: false, creatorPubkey: '',
 };
 
@@ -41,11 +41,8 @@ function costRows() {
 
 function setField(key, value) {
   form[key] = value;
-	if (value && key === 'holderReward') {
-		form.cashback = false;
-		form.mayhemMode = false;
-	}
-	if (value && (key === 'cashback' || key === 'mayhemMode')) form.holderReward = false;
+  if (value && key === 'holderReward') form.mayhemMode = false;
+  if (value && key === 'mayhemMode') form.holderReward = false;
   renderSummary();
 }
 
@@ -209,7 +206,7 @@ async function submit(e) {
         connection, mint: mint.publicKey,
         name: form.name.trim(), symbol: form.symbol.trim().toUpperCase(), uri: metadataUri,
         creator: creator.publicKey, user: creator.publicKey,
-        devBuyLamports, mayhemMode: form.mayhemMode, cashback: form.cashback, holderReward: form.holderReward,
+        devBuyLamports, mayhemMode: form.mayhemMode, holderReward: form.holderReward,
       }),
       fetchPumpLookupTables(connection, { cluster: store.getSettings().cluster }),
       resolveTipAccount(),
@@ -265,7 +262,6 @@ function render() {
     field({ label: 'Website', key: 'website', placeholder: 'https://…', type: 'url' }),
     toggle({ label: 'Mayhem mode', desc: 'pump.fun\'s higher-volatility curve', key: 'mayhemMode' }),
     toggle({ label: 'Holder rewards', desc: 'Route protocol creator fees to coin holders', key: 'holderReward' }),
-    toggle({ label: 'Cashback', desc: 'Legacy fee routing for existing integrations', key: 'cashback' }),
     toggle({ label: 'Separate creator wallet', desc: 'Pay from one wallet, earn fees in another', key: 'separateCreator' }),
     creatorRow);
 

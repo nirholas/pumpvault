@@ -4,6 +4,8 @@ export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 /** Rent-exempt minimum for a 0-byte system account. Left behind on every drain. */
 export const RENT_EXEMPT_MIN_LAMPORTS = 890_880;
+/** Rent-exempt minimum for a 165-byte SPL token account (an ATA a sweep may have to create). */
+export const TOKEN_ACCOUNT_RENT_LAMPORTS = 2_039_280;
 
 /** pump.fun bonding-curve program. */
 export const PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
@@ -12,6 +14,14 @@ export const PUMP_AMM_PROGRAM_ID = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWp
 
 /** Byte offset of the `creator` pubkey inside a BondingCurve account (8 disc + 5 u64 + 1 bool). */
 export const BONDING_CURVE_CREATOR_OFFSET = 49;
+/** Byte offset of `coin_creator` inside a PumpSwap Pool account (8 disc + u8 + u16 + 6 pubkeys + u64). */
+export const POOL_COIN_CREATOR_OFFSET = 211;
+/**
+ * Account discriminators from the Pump and PumpSwap IDLs (`BondingCurve`, `Pool`), base58 for
+ * memcmp filters. Both accounts grow by appending fields, so scans never filter on data size.
+ */
+export const BONDING_CURVE_DISCRIMINATOR = '4y6pru6YvC7';
+export const POOL_DISCRIMINATOR = 'hQrXeCntzbV';
 
 /** Address lookup tables pump.fun publishes for create+buy transactions. */
 export const PUMP_ALT_MAINNET = new PublicKey('7mFD2mUtRS65XstiSAvCJuYmdesZoQwCwRJhq1p3eRMe');
@@ -49,6 +59,14 @@ export const CU_CREATE = 270_000;
 export const CU_BUY = 120_000;
 export const CU_COLLECT = 200_000;
 export const CU_TRANSFER = 20_000;
+export const CU_DISTRIBUTE = 300_000;
+/**
+ * Budget per `sweep_creator_fee` (curve or pool). Generous on purpose: a pool sweep may
+ * create the creator vault's quote ATA and a first sweep grows a pre-upgrade account.
+ */
+export const CU_SWEEP = 80_000;
+/** Base fee per signature, in lamports. */
+export const LAMPORTS_PER_SIGNATURE = 5_000;
 
 /** Default priority fee (micro-lamports per CU). */
 export const DEFAULT_PRIORITY_MICROLAMPORTS = 500_000;

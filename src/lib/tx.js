@@ -13,6 +13,35 @@ export function computeBudgetInstructions({ units, priorityMicroLamports = DEFAU
   ];
 }
 
+/** Any valid blockhash: a message's size does not depend on which one it carries. */
+const SIZING_BLOCKHASH = '11111111111111111111111111111111';
+
+function wireSize(message) {
+  return 1 + 64 * message.header.numRequiredSignatures + message.serialize().length;
+}
+
+/**
+ * Bytes a v0 transaction with these instructions takes on the wire, signatures included,
+ * or `Infinity` when it cannot be encoded at all. Compare with `MAX_TX_BYTES`.
+ */
+export function transactionSize({ payer, instructions, lookupTables = [] }) {
+  try {
+    const message = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: SIZING_BLOCKHASH,
+      instructions,
+    }).compileToV0Message(lookupTables);
+    return wireSize(message);
+  } catch {
+    return Infinity;
+  }
+}
+
+/** True when the transaction fits in one packet (`MAX_TX_BYTES`). */
+export function fitsInTransaction(args) {
+  return transactionSize(args) <= MAX_TX_BYTES;
+}
+
 /** Compile + sign a v0 transaction. `signers` must include the payer. */
 export function buildSignedTx({ payer, instructions, blockhash, signers, lookupTables = [] }) {
   const message = new TransactionMessage({
@@ -30,7 +59,7 @@ export function buildSignedTx({ payer, instructions, blockhash, signers, lookupT
   );
   let size;
   try {
-    size = 1 + 64 * message.header.numRequiredSignatures + message.serialize().length;
+    size = wireSize(message);
   } catch {
     throw tooBig();
   }

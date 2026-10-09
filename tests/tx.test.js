@@ -105,7 +105,15 @@ describe('Pump V2 holder rewards', () => {
     await expect(buildCreateInstructions({
       mint: Keypair.generate().publicKey,
       name: 'Holder Coin', symbol: 'HOLD', uri: 'https://example.com/metadata.json',
-      creator: payer.publicKey, user: payer.publicKey, holderReward: true, cashback: true,
+      creator: payer.publicKey, user: payer.publicKey, holderReward: true, mayhemMode: true,
     })).rejects.toThrow(/cannot be combined/i);
+  });
+
+  it('refuses cashback launches, which the upgraded program rejects with 6082', async () => {
+    await expect(buildCreateInstructions({
+      mint: Keypair.generate().publicKey,
+      name: 'Cash Coin', symbol: 'CASH', uri: 'https://example.com/metadata.json',
+      creator: payer.publicKey, user: payer.publicKey, cashback: true,
+    })).rejects.toThrow(/cashback/i);
   });
 });
