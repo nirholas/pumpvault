@@ -186,3 +186,7 @@ Tests cover the parts where a mistake costs money: secret-key parsing, vault enc
 - On-chain work through [`@pump-fun/pump-sdk`](https://www.npmjs.com/package/@pump-fun/pump-sdk) 4.0 and [`@pump-fun/pump-swap-sdk`](https://www.npmjs.com/package/@pump-fun/pump-swap-sdk) 2.1, which cover the October 2026 Pump and PumpSwap upgrade. Account reads go through the SDK decoders, which accept both the shorter pre-upgrade layouts and the longer current ones, and read the pool's `virtual_quote_reserves` as the signed value it is.
 
 
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nirholas/pumpvault&type=Date)](https://www.star-history.com/#nirholas/pumpvault&Date)
