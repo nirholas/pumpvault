@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+title: "pumpvault"
+abstract: "Launch coins on pump.fun, claim the creator fees they earn, and get funds out of a wallet whose key has leaked. Everything runs in the browser: keys are generated locally, encrypted with your passphrase, and never sent anywhere."
+repository-code: "https://github.com/nirholas/pumpvault"
+url: "https://three.ws"
+authors:
+  - name: three.ws
+    website: "https://three.ws"

@@ -1,0 +1,28 @@
+# pumpvault
+
+> Launch coins on pump.fun, claim the creator fees they earn, and get funds out of a wallet whose key has leaked. Everything runs in the browser: keys are generated locally, encrypted with your passphrase, and never sent anywhere.
+
+pumpvault is an open-source repository by nirholas, part of the three.ws ecosystem.
+
+## Docs
+
+- [README](https://github.com/nirholas/pumpvault/blob/HEAD/README.md): install, usage and reference
+- [Why this exists](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#why-this-exists)
+- [What atomic means here](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#what-atomic-means-here)
+- [Quick start](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#quick-start)
+- [Using it](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#using-it)
+- [Fee routing, and why a coin sometimes cannot be claimed](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#fee-routing-and-why-a-coin-sometimes-cannot-be-claimed)
+- [Fees waiting on the curve and in the pool](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#fees-waiting-on-the-curve-and-in-the-pool)
+- [Command line](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#command-line)
+- [Library](https://github.com/nirholas/pumpvault/blob/HEAD/README.md#library)
+- [AGENTS.md](https://github.com/nirholas/pumpvault/blob/HEAD/AGENTS.md): guidance for coding agents
+- [Full text for LLMs](https://github.com/nirholas/pumpvault/blob/HEAD/llms-full.txt): the README inlined
+
+## Project
+
+- [Source](https://github.com/nirholas/pumpvault)
+- [Issues](https://github.com/nirholas/pumpvault/issues)
+- [Discussions](https://github.com/nirholas/pumpvault/discussions)
+- [Homepage](https://github.com/nirholas/pumpvault)
+- [three.ws](https://three.ws): the platform this is part of
+- [All repositories by nirholas](https://github.com/nirholas/nirholas#readme)
