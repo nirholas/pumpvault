@@ -67,7 +67,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2",
+    "concurrently": "^9.2.5",
     "vite": "^7.0.0",
     "vite-plugin-node-polyfills": "^0.28.0",
     "vitest": "^3.2.4"
