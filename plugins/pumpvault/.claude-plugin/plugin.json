@@ -1,0 +1,17 @@
+{
+  "name": "pumpvault",
+  "version": "0.1.0",
+  "description": "Launch pump.fun coins, check and claim creator fees, and rescue funds from an exposed Solana wallet with Jito bundles.",
+  "author": {
+    "name": "nirholas"
+  },
+  "repository": "https://github.com/nirholas/pumpvault",
+  "homepage": "https://github.com/nirholas/pumpvault",
+  "keywords": [
+    "solana",
+    "pump-fun",
+    "creator-fees",
+    "jito",
+    "wallet-rescue"
+  ]
+}
