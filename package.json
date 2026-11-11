@@ -70,7 +70,9 @@
     "concurrently": "^9.2.5",
     "vite": "^7.3.7",
     "vite-plugin-node-polyfills": "^0.28.0",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "bigint-buffer": "file:vendor/bigint-buffer",
+    "elliptic": "file:vendor/elliptic"
   },
   "overrides": {
     "toml@<=5.0.0": "^5.0.1",
@@ -79,6 +81,8 @@
     "stream-json@<=3.5.0": "^3.6.0",
     "stream-json@<3.6.0": "^3.6.0",
     "stream-json@<=3.4.0": "^3.6.0",
-    "uuid@<11.1.1": "^11.1.1"
+    "uuid@<11.1.1": "^11.1.1",
+    "bigint-buffer": "$bigint-buffer",
+    "elliptic": "$elliptic"
   }
 }
