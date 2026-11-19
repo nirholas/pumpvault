@@ -394,7 +394,7 @@ export function mergePlans(...plans) {
  */
 export async function executePlan(connection, plan, { simulate = true, onStage, jitoEndpoints } = {}) {
   onStage?.('blockhash');
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
   const signed = plan.txs.map((t) => buildSignedTx({
     payer: t.payer,
     instructions: t.instructions,
@@ -414,7 +414,7 @@ export async function executePlan(connection, plan, { simulate = true, onStage, 
   const { bundleId, endpoint } = await sendBundle(signed, { endpoints: jitoEndpoints });
   const signatures = signed.map(signatureOf);
   onStage?.('confirm', { bundleId, signatures });
-  await confirmSignatures(connection, signatures, { onPoll: (r) => onStage?.('poll', r) });
+  await confirmSignatures(connection, signatures, { lastValidBlockHeight, onPoll: (r) => onStage?.('poll', r) });
   return { bundleId, endpoint, signatures };
 }
 

@@ -85,12 +85,20 @@ export async function simulateOrThrow(connection, tx, { label = 'Transaction' } 
 }
 
 /**
- * Poll signature statuses until all are confirmed (or the blockhash expires).
+ * Poll signature statuses until all are confirmed.
+ *
+ * With `lastValidBlockHeight` (from the `getLatestBlockhash` the transactions were signed
+ * against), polling ends as soon as the chain passes that height: from then on the
+ * transactions can never land, so the caller can safely rebuild and retry. Without it, or
+ * if `timeoutMs` runs out first, the outcome is unknown and the error says so, because
+ * retrying a launch that later lands would launch twice.
  * @returns {Promise<Array<{signature:string, status:string, err:any}>>}
  */
-export async function confirmSignatures(connection, signatures, { timeoutMs = 90_000, intervalMs = 1500, onPoll } = {}) {
+export async function confirmSignatures(connection, signatures, {
+  lastValidBlockHeight, timeoutMs = 90_000, intervalMs = 1500, onPoll,
+} = {}) {
   const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+  const check = async () => {
     const { value } = await connection.getSignatureStatuses(signatures);
     const results = value.map((s, i) => ({
       signature: signatures[i],
@@ -100,10 +108,25 @@ export async function confirmSignatures(connection, signatures, { timeoutMs = 90
     onPoll?.(results);
     const failed = results.find((r) => r.err);
     if (failed) throw new Error(`Transaction ${failed.signature} failed on chain: ${JSON.stringify(failed.err)}`);
-    if (results.every((r) => r.status === 'confirmed' || r.status === 'finalized')) return results;
+    return results.every((r) => r.status === 'confirmed' || r.status === 'finalized') ? results : null;
+  };
+
+  while (Date.now() - started < timeoutMs) {
+    const done = await check();
+    if (done) return done;
+    if (lastValidBlockHeight != null && await connection.getBlockHeight('confirmed') > lastValidBlockHeight) {
+      // One last look: a transaction in the final valid block can surface a moment after the height moves on.
+      const late = await check();
+      if (late) return late;
+      throw new Error('The blockhash expired before the bundle landed, so nothing was moved. Retry, with a higher tip if this repeats.');
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error('Not confirmed within the wait window. Bundles that miss their slot are dropped with no funds moved; retry with a higher tip.');
+  throw new Error(
+    lastValidBlockHeight != null
+      ? `Not confirmed within the wait window, but the bundle can still land until block height ${lastValidBlockHeight}. Check the signatures on an explorer before retrying.`
+      : 'Not confirmed within the wait window. Check the signatures on an explorer before retrying: the bundle may still land.',
+  );
 }
 
 export const solscanTxUrl = (sig) => `https://solscan.io/tx/${sig}`;
@@ -111,11 +134,25 @@ export const solscanAccountUrl = (addr) => `https://solscan.io/account/${addr}`;
 export const pumpCoinUrl = (mint) => `https://pump.fun/coin/${mint}`;
 
 export function lamportsToSol(lamports, digits = 4) {
-  return (Number(lamports) / 1e9).toFixed(digits).replace(/\.?0+$/, '') || '0';
+  const fixed = (Number(lamports) / 1e9).toFixed(digits);
+  // Only zeros after the decimal point are trailing; "10" with digits = 0 stays "10".
+  return fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed;
 }
 
+/**
+ * Parse a SOL amount (a decimal string, as typed, or a number) into integer lamports.
+ * Strings are converted digit by digit, so "0.3" is exactly 300,000,000 with no float
+ * rounding; digits past the ninth decimal round half up.
+ */
 export function solToLamports(sol) {
-  const n = Number(sol);
-  if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid SOL amount: ${sol}`);
-  return Math.round(n * 1e9);
+  const text = typeof sol === 'number'
+    ? (Number.isFinite(sol) && Math.abs(sol) < 1e15 ? sol.toFixed(9) : '')
+    : String(sol ?? '').trim();
+  const match = /^(\d*)(?:\.(\d*))?$/.exec(text);
+  if (!match || !/\d/.test(text)) throw new Error(`Invalid SOL amount: ${sol}`);
+  const [, whole, fraction = ''] = match;
+  let lamports = BigInt(whole || '0') * 1_000_000_000n + BigInt(fraction.slice(0, 9).padEnd(9, '0'));
+  if (fraction.length > 9 && fraction[9] >= '5') lamports += 1n;
+  if (lamports > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`Invalid SOL amount: ${sol}`);
+  return Number(lamports);
 }
