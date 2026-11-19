@@ -48,8 +48,12 @@ export function toast(message, type = 'ok', ms = 5000) {
 }
 
 export async function copy(text, label = 'Copied') {
-  await navigator.clipboard.writeText(text);
-  toast(label);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(label);
+  } catch {
+    toast('Copy failed: the browser blocked clipboard access', 'err');
+  }
 }
 
 function openModal(content, { onClose } = {}) {

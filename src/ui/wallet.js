@@ -33,7 +33,12 @@ async function onCreate() {
     submitLabel: 'Generate',
   });
   if (!values) return;
-  const pubkey = await store.createWallet({ label: values.label?.trim() });
+  let pubkey;
+  try {
+    pubkey = await store.createWallet({ label: values.label?.trim() });
+  } catch (e) {
+    return toast(e.message, 'err');
+  }
   toast('Wallet created');
   showBackup(pubkey);
   render();
