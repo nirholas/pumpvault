@@ -36,7 +36,7 @@ The frontend is plain static files, so any CDN can serve `dist/`. Three requests
 | `GET /api/pump/*` | `https://frontend-api-v3.pump.fun` | upstream returns 403 to browser origins |
 | `POST /api/ipfs` | `https://pump.fun/api/ipfs` | upstream sends no CORS headers |
 
-Anything that can proxy an HTTP request works: a Cloudflare Worker, an nginx `proxy_pass`, a serverless function. Copy the handlers out of `server/index.mjs`; each is a handful of lines.
+Anything that can proxy an HTTP request works: a Cloudflare Worker, an nginx `proxy_pass`, a serverless function. Copy the handlers out of `server/index.mjs` together with their allowlists; a bare `proxy_pass` to your RPC is an open relay.
 
 Jito is called directly from the browser and needs no proxy: its block engines send permissive CORS headers.
 
@@ -53,5 +53,6 @@ Users can override the RPC per browser in their own settings; the server default
 
 - **Use a paid RPC.** This is the single biggest reliability factor. Launches fail on rate-limited public nodes.
 - **Serve over HTTPS.** WebCrypto requires a secure context, so the vault will not work over plain HTTP on a remote host (localhost is exempt).
-- **Keep the proxy narrow.** `/api/rpc` forwards whatever JSON body it receives. If your deployment is public, rate-limit it or it becomes an open relay to your paid RPC.
+- **Keep the proxy narrow.** `/api/rpc` forwards only the read and simulate methods the app calls (no `sendTransaction`, no airdrops), and `getProgramAccounts` only as a filtered scan of the two pump programs; `/api/pump/*` serves only the two coin lookups. Each upstream call times out (20 s RPC, 10 s pump.fun, 30 s IPFS) and upstream errors are reported without the RPC URL. Those allowed reads still cost RPC credits, so rate-limit a public deployment at your TLS terminator or CDN. If you copy the handlers to another host, copy the allowlists with them (`RPC_METHODS`, `isAllowedRpcCall`, `pumpApiPath` in `server/index.mjs`).
+- **Keep the security headers.** The server sends a Content-Security-Policy (`script-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`), `nosniff`, `no-referrer` and `X-Frame-Options: DENY` on every response. A static host serving `dist/` should send the same headers; the policy is `CONTENT_SECURITY_POLICY` in `server/index.mjs`.
 - **Check `/api/health`** after deploying: it reports the RPC host and cluster the server is actually using.

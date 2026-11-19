@@ -54,7 +54,9 @@ There is no intermediate state in which the exposed wallet holds a balance a bot
 
 ## What the server can see
 
-`server/index.mjs` proxies three things: JSON-RPC calls, pump.fun API reads, and the IPFS upload for coin metadata. It therefore sees the addresses you look up and the images you upload, the same way any RPC provider does. It never sees a private key, a passphrase, or a signed transaction; those go from your browser to Jito directly.
+`server/index.mjs` proxies three things: JSON-RPC reads and simulations (an allowlist of the methods the app uses), the two pump.fun coin lookups, and the IPFS upload for coin metadata. It refuses everything else, so it cannot be used as an open relay to the RPC endpoint or to arbitrary hosts. It therefore sees the addresses you look up and the images you upload, the same way any RPC provider does. It never sees a private key, a passphrase, or a signed transaction; those go from your browser to Jito directly.
+
+Every page is served with a Content-Security-Policy that only runs scripts from the page's own origin, which limits what an injected `<script>` or a hostile third-party resource could do with the unlocked keys.
 
 If you self-host, that log is yours. If you use someone else's deployment, you are trusting them with that metadata and with serving honest JavaScript.
 
