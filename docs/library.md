@@ -73,7 +73,7 @@ const tipAccount = pickTipAccount(await fetchTipAccounts());
 const { bundleId, endpoint } = await sendBundle([signedTx1, signedTx2]);
 ```
 
-`fetchTipAccounts` reads the live list and falls back to a pinned snapshot. `sendBundle` tries every block engine region in order and stops at the first acceptance; a 4xx that is not rate limiting stops the loop, since no region will accept a rejected bundle.
+`fetchTipAccounts` reads the live list (keeping only valid addresses) and falls back to a pinned snapshot. `sendBundle` submits base64-encoded transactions and tries every block engine region in order, stopping at the first acceptance; a 4xx that is not rate limiting stops the loop, since no region will accept a rejected bundle. Every block-engine request times out after `JITO_REQUEST_TIMEOUT_MS` (10 s) and moves on to the next region; each function also takes `{ timeoutMs, fetchImpl }`.
 
 ## pump
 
