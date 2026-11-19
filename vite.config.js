@@ -26,6 +26,10 @@ export default defineConfig({
   ],
   build: {
     target: 'es2022',
+    // npm links the patched bigint-buffer and elliptic from vendor/ (see package.json
+    // overrides), so they resolve outside node_modules. Their CommonJS still has to be
+    // converted, or Rollup cannot see their named exports.
+    commonjsOptions: { include: [/node_modules/, /vendor\//] },
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'index.html'),
