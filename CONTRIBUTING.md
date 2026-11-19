@@ -15,6 +15,7 @@ Thanks for helping. Small, focused changes land fastest.
 git clone https://github.com/nirholas/pumpvault.git
 cd pumpvault
 npm install
+npm run lint
 npm test
 ```
 

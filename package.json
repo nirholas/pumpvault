@@ -53,6 +53,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node --env-file-if-exists=.env server/index.mjs",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -67,12 +68,15 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "bigint-buffer": "file:vendor/bigint-buffer",
     "concurrently": "^9.2.5",
+    "elliptic": "file:vendor/elliptic",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
     "vite": "^7.3.7",
     "vite-plugin-node-polyfills": "^0.28.0",
-    "vitest": "^5.0.5",
-    "bigint-buffer": "file:vendor/bigint-buffer",
-    "elliptic": "file:vendor/elliptic"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "toml@<=5.0.0": "^5.0.1",

@@ -178,6 +178,7 @@ It holds no state and stores nothing. Point it at your own RPC and it is the who
 
 ```bash
 npm run dev     # vite on :5173 with the proxy on :8787
+npm run lint    # eslint
 npm test        # vitest
 npm run build   # static site into dist/
 ```

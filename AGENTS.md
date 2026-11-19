@@ -34,9 +34,10 @@ npm install
 | dev | `npm run dev` |
 | start | `npm start` |
 | build | `npm run build` |
+| lint | `npm run lint` |
 | test | `npm test` |
 
-Run the test and lint commands above before you consider a change finished. If a command fails on code you did not touch, say so in your report instead of silently skipping it.
+Run the lint, test and build commands above before you consider a change finished; CI (`.github/workflows/ci.yml`) runs all three on Node 20 and 22. If a command fails on code you did not touch, say so in your report instead of silently skipping it.
 
 ## Conventions
 
