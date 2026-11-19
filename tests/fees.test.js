@@ -10,7 +10,7 @@ import {
   PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID,
 } from '../src/lib/constants.js';
 import {
-  buildSweepInstructions, getWaitingCreatorFees, resolveCurveMint, scanCreatorCurves, scanCreatorPools,
+  buildSweepInstructions, getWaitingCreatorFees, listCreatedCoins, resolveCurveMint, scanCreatorCurves, scanCreatorPools,
 } from '../src/lib/fees.js';
 
 const { pumpIdl } = createRequire(import.meta.url)('@pump-fun/pump-sdk');
@@ -190,5 +190,21 @@ describe('on-chain scans', () => {
     const { sweeps, unsweepable } = await buildSweepInstructions(waiting, key());
     expect(sweeps).toHaveLength(0);
     expect(unsweepable).toEqual([{ venue: 'curve', address: waiting.curves[0].address, mint: null, lamports: 5 }]);
+  });
+});
+
+describe('listCreatedCoins', () => {
+  it('drops API entries whose mint is not a real address instead of rendering them', async () => {
+    const creator = key();
+    const good = key().toBase58();
+    const listing = [
+      { mint: good, creator: creator.toBase58(), name: 'Good', symbol: 'GOOD' },
+      { mint: 'javascript:alert(1)', creator: creator.toBase58(), name: 'Bad' },
+      { mint: `${good}/../../x`, creator: creator.toBase58(), name: 'Bad path' },
+      { creator: creator.toBase58(), name: 'No mint' },
+    ];
+    const fetchImpl = async () => new Response(JSON.stringify(listing), { status: 200 });
+    const coins = await listCreatedCoins({ connection: memoryConnection({}), creator, apiBase: 'https://api.example', fetchImpl });
+    expect(coins.map((c) => c.mint)).toEqual([good]);
   });
 });

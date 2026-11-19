@@ -4,10 +4,20 @@ import { getSettings } from './store.js';
 let cached = null;
 let cachedUrl = null;
 
-/** The browser's RPC endpoint: the server proxy unless the user set a direct URL in settings. */
+/**
+ * The browser's RPC endpoint: the server proxy, unless the stored settings hold a direct
+ * https URL (anything else, including a malformed value, falls back to the proxy).
+ */
 export function rpcUrl() {
-  const custom = getSettings().rpcUrl?.trim();
-  return custom || `${location.origin}/api/rpc`;
+  const custom = String(getSettings().rpcUrl ?? '').trim();
+  if (custom) {
+    try {
+      if (new URL(custom).protocol === 'https:') return custom;
+    } catch {
+      /* not a URL: use the proxy */
+    }
+  }
+  return `${location.origin}/api/rpc`;
 }
 
 export function getConnection() {

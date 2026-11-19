@@ -47,7 +47,7 @@ Jito is called directly from the browser and needs no proxy: its block engines s
 | `RPC_URL` | `https://api.mainnet-beta.solana.com` | Use a paid endpoint in production. Public nodes rate-limit and drop transactions. |
 | `PORT` | `8787` | Serves both the static files and the proxies. |
 
-Users can override the RPC per browser in their own settings; the server default is what everyone else gets.
+The browser uses the server's `/api/rpc` proxy. There is no settings screen yet; a direct endpoint can only be set per browser by storing `rpcUrl` (an `https://` URL) in the `pumpvault.settings.v1` localStorage entry, and anything else falls back to the proxy.
 
 ## Before you put it in front of users
 

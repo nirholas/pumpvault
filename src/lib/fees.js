@@ -292,6 +292,15 @@ export async function buildCollectInstructions(connection, creator, feePayer) {
   };
 }
 
+function isCanonicalAddress(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    return new PublicKey(value).toBase58() === value;
+  } catch {
+    return false;
+  }
+}
+
 function normaliseCoin(c, source) {
   return {
     mint: c.mint,
@@ -322,7 +331,8 @@ export async function listCreatedCoins({ connection, creator, apiBase, fetchImpl
     throw new Error(`Could not list coins: ${apiResult.reason?.message}; ${chainResult.reason?.message}`);
   }
   const byMint = new Map();
-  for (const c of apiResult.value ?? []) byMint.set(c.mint, normaliseCoin(c, 'api'));
+  // The API is untrusted input: an entry whose mint is not a canonical address is dropped, not rendered.
+  for (const c of apiResult.value ?? []) if (isCanonicalAddress(c?.mint)) byMint.set(c.mint, normaliseCoin(c, 'api'));
   const missing = (chainResult.value ?? []).filter((m) => !byMint.has(m));
   const details = await Promise.all(missing.map((m) => fetchCoin(m, { apiBase, fetchImpl }).catch(() => null)));
   missing.forEach((mint, i) => {

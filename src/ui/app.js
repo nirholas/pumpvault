@@ -11,12 +11,15 @@ export const fmt = {
   time: (ms) => new Date(ms).toLocaleString(),
 };
 
+/**
+ * Build a DOM element. Children are appended as nodes or text, never parsed as HTML, so
+ * names, symbols and descriptions from pump.fun's API cannot inject markup.
+ */
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v == null || v === false) continue;
     if (k === 'class') node.className = v;
-    else if (k === 'html') node.innerHTML = v;
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'dataset') Object.assign(node.dataset, v);
     else node.setAttribute(k, v === true ? '' : v);
