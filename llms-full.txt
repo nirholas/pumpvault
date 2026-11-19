@@ -181,7 +181,7 @@ npm test        # vitest
 npm run build   # static site into dist/
 ```
 
-Tests cover the parts where a mistake costs money: secret-key parsing, vault encryption, and every transfer amount the plan builders compute.
+Tests cover the parts where a mistake costs money or leaks a key: secret-key parsing, vault encryption and key wiping, every transfer amount and tip placement the plan builders compute, bundle submission and confirmation, and the proxy allowlists. None of them touch the network.
 
 ## Credits
 
