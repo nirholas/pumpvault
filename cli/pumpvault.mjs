@@ -20,9 +20,9 @@ import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { NATIVE_MINT } from '@solana/spl-token';
-import { parseSecretKey } from '../src/lib/keys.js';
+import { parseSecretKey, toPublicKey } from '../src/lib/keys.js';
 import {
-  buildCreateInstructions, estimateLaunchCost, fetchPumpLookupTables, uploadMetadata,
+  buildCreateInstructions, estimateLaunchCost, fetchPumpLookupTables, uploadMetadata, validateCoinDetails,
 } from '../src/lib/pump.js';
 import {
   buildCollectInstructions, getCoinFeeStatus, getCreatorFeeBreakdown, listCreatedCoins,
@@ -114,6 +114,15 @@ function connect(values) {
 
 const sol = (l) => `${lamportsToSol(l, 6)} SOL`;
 
+/** A base58 address from a flag, validated before anything is built or confirmed. */
+function address(value, flag) {
+  try {
+    return toPublicKey(value, flag).toBase58();
+  } catch (e) {
+    return fail(e.message);
+  }
+}
+
 async function run(connection, plan, label) {
   say('');
   const result = await executePlan(connection, plan, {
@@ -201,9 +210,17 @@ async function cmdLaunch(values) {
   const connection = connect(values);
   const creator = loadKey('CREATOR_SECRET');
   const funder = values['funder-secret-env'] ? loadKey(values['funder-secret-env']) : creator;
-  const name = values.name ?? fail('--name is required');
-  const symbol = (values.symbol ?? fail('--symbol is required')).toUpperCase();
+  const name = (values.name ?? fail('--name is required')).trim();
+  const symbol = (values.symbol ?? fail('--symbol is required')).trim().toUpperCase();
   const imagePath = values.image ?? fail('--image is required (a PNG, JPG, GIF or WebP file)');
+  const invalid = Object.values(validateCoinDetails({ name, symbol, description: values.description ?? '' }));
+  if (invalid.length) fail(invalid[0]);
+  let imageBytes;
+  try {
+    imageBytes = readFileSync(imagePath);
+  } catch {
+    fail(`Could not read the image at ${imagePath}`);
+  }
   const devBuyLamports = values['dev-buy'] ? solToLamports(values['dev-buy']) : 0;
   const tipLamports = values.tip ? solToLamports(values.tip) : DEFAULT_LAUNCH_TIP_LAMPORTS;
 
@@ -222,7 +239,7 @@ async function cmdLaunch(values) {
 
   say('Uploading metadata to IPFS...');
   const { metadataUri } = await uploadMetadata({
-    image: { bytes: readFileSync(imagePath), filename: basename(imagePath) },
+    image: { bytes: imageBytes, filename: basename(imagePath) },
     name, symbol,
     description: values.description ?? '',
     twitter: values.twitter ?? '',
@@ -254,7 +271,7 @@ async function cmdClaim(values) {
   const connection = connect(values);
   const creator = loadKey('CREATOR_SECRET');
   const funder = values['funder-secret-env'] ? loadKey(values['funder-secret-env']) : creator;
-  const destination = values.to ?? null;
+  const destination = values.to ? address(values.to, '--to') : null;
   const tipLamports = values.tip ? solToLamports(values.tip) : DEFAULT_LAUNCH_TIP_LAMPORTS;
 
   const [fees, creatorBalance] = await Promise.all([
@@ -265,7 +282,9 @@ async function cmdClaim(values) {
 
   say(`Claiming ${sol(fees.totalLamports)} for ${creator.publicKey.toBase58()}`);
   sayBreakdown(fees);
-  if (destination) say(`  forwarding to ${destination} in the same transaction`);
+  if (destination && destination !== creator.publicKey.toBase58()) {
+    say(`  forwarding to ${destination} in the same transaction, with the rest of this wallet's SOL above the rent-exempt minimum`);
+  }
   if (!(await confirm('Claim now?', values.yes))) return say('Cancelled.');
 
   const [claim, tipAccount, lookupTables] = await Promise.all([
@@ -299,10 +318,11 @@ async function cmdRescue(values) {
   const connection = connect(values);
   const victim = loadKey('VICTIM_SECRET');
   const funder = loadKey('FUNDER_SECRET');
-  const destination = values.to ?? fail('--to is required: the safe wallet that receives everything');
+  const destination = address(values.to ?? fail('--to is required: the safe wallet that receives everything'), '--to');
   const tipLamports = values.tip ? solToLamports(values.tip) : DEFAULT_RESCUE_TIP_LAMPORTS;
 
   if (victim.publicKey.equals(funder.publicKey)) fail('FUNDER_SECRET must be a different wallet from VICTIM_SECRET.');
+  if (destination === victim.publicKey.toBase58()) fail('--to must be a different wallet from VICTIM_SECRET.');
 
   const [balance, fees, heldTokens] = await Promise.all([
     connection.getBalance(victim.publicKey, 'confirmed'),
@@ -327,8 +347,8 @@ async function cmdRescue(values) {
 
   const tipAccount = await resolveTipAccount();
   const plans = [];
-  let tip = tipLamports;
-  const takeTip = () => { const t = tip; tip = 0; return t; };
+  // The last transaction in the bundle tips: the token transfers when there are any.
+  const solTip = tokens.length ? 0 : tipLamports;
 
   if (vault > 0) {
     const [claim, lookupTables] = await Promise.all([
@@ -339,19 +359,19 @@ async function cmdRescue(values) {
       ...claim, funder, creator: victim, destination, creatorBalanceLamports: balance, lookupTables,
       // Token transfers take 3 per transaction; sweeps get whatever bundle room is left.
       maxTxs: 5 - Math.ceil(tokens.length / 3),
-      tipLamports: takeTip(), tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
+      tipLamports: solTip, tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
     });
     sayDeferred(collectPlan.summary);
     plans.push(collectPlan);
   } else if (movesSol) {
     plans.push(planDrainSol({
       funder, from: victim, destination, balanceLamports: balance,
-      keepLamports: RENT_EXEMPT_MIN_LAMPORTS, tipLamports: takeTip(), tipAccount,
+      keepLamports: RENT_EXEMPT_MIN_LAMPORTS, tipLamports: solTip, tipAccount,
     }));
   }
   if (tokens.length) {
     plans.push(planRescueTokens({
-      funder, from: victim, destinationOwner: destination, tokens, tipLamports: takeTip(), tipAccount,
+      funder, from: victim, destinationOwner: destination, tokens, tipLamports, tipAccount,
     }));
   }
 

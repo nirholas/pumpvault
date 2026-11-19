@@ -38,7 +38,7 @@ const { bundleId, signatures } = await executePlan(connection, plan, {
 });
 ```
 
-`mergePlans(...plans)` combines planners into one bundle (five transactions maximum). Only the first plan should carry a tip; pass `tipLamports: 0` to the rest.
+`mergePlans(...plans)` combines planners into one bundle (five transactions maximum). Every planner tips once, in its own last transaction, so only the last plan should carry a tip; pass `tipLamports: 0` to the others.
 
 ## keys
 

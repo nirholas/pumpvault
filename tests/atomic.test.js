@@ -23,6 +23,7 @@ const dummyIx = () => new TransactionInstruction({
 const transfersIn = (tx) => tx.instructions
   .filter((ix) => ix.programId.equals(SystemProgram.programId))
   .map((ix) => ({ lamports: Number(ix.data.readBigUInt64LE(4)), to: ix.keys[1].pubkey.toBase58(), from: ix.keys[0].pubkey.toBase58() }));
+const isTip = (t) => t.to === tipAccount.toBase58();
 
 describe('planLaunch', () => {
   const base = {
@@ -52,16 +53,18 @@ describe('planLaunch', () => {
     expect(plan.txs[1].payer.toBase58()).toBe(creator.publicKey.toBase58());
   });
 
-  it('forwards exactly the rent plus the dev buy to the creator', () => {
+  it('forwards exactly the rent, the dev buy and the tip to the creator', () => {
     const plan = planLaunch({ ...base, creator });
     const forward = transfersIn(plan.txs[0]).find((t) => t.to === creator.publicKey.toBase58());
-    expect(forward.lamports).toBe(30_000_000 + 20_000_000);
-    expect(plan.summary.forwardedLamports).toBe(50_000_000);
+    expect(forward.lamports).toBe(30_000_000 + 20_000_000 + TIP);
+    expect(plan.summary.forwardedLamports).toBe(50_000_000 + TIP);
   });
 
-  it('keeps the tip out of the create transaction, so only the funder pays it', () => {
+  it('tips once, in the create transaction at the end of the bundle, from the SOL the funder forwarded', () => {
     const plan = planLaunch({ ...base, creator });
-    expect(transfersIn(plan.txs[1])).toHaveLength(0);
+    expect(transfersIn(plan.txs[0]).filter(isTip)).toHaveLength(0);
+    const tips = transfersIn(plan.txs[1]).filter(isTip);
+    expect(tips).toEqual([{ lamports: TIP, to: tipAccount.toBase58(), from: creator.publicKey.toBase58() }]);
   });
 
   it('totals what actually leaves the funder', () => {
@@ -129,7 +132,6 @@ async function curveSweep(lamports, payer = funder.publicKey) {
 }
 
 const signsAndFits = (tx) => buildSignedTx({ ...tx, blockhash: '11111111111111111111111111111111' });
-const isTip = (t) => t.to === tipAccount.toBase58();
 
 describe('planCollect with waiting creator fees', () => {
   // The SDK collect is signed by the creator, so the stand-in is too.
@@ -185,7 +187,7 @@ describe('planCollect with waiting creator fees', () => {
     expect(self.summary.drainLamports).toBe(2_000_000 + 5_000_000 + 1_000_000 - RENT_EXEMPT_MIN_LAMPORTS - TIP - fee - 2_039_280);
   });
 
-  it('moves sweeps that do not fit into earlier transactions, tipping once, and every transaction fits', async () => {
+  it('moves sweeps that do not fit into earlier transactions, tipping once in the claim, and every transaction fits', async () => {
     const sweeps = await Promise.all(Array.from({ length: 12 }, (_, i) => curveSweep(1_000 * (i + 1))));
     const plan = planCollect({ ...base, sweeps, destination });
     expect(plan.txs.length).toBeGreaterThan(1);
@@ -193,7 +195,7 @@ describe('planCollect with waiting creator fees', () => {
     for (const tx of plan.txs) expect(() => signsAndFits(tx)).not.toThrow();
     const tips = plan.txs.flatMap((tx) => transfersIn(tx).filter(isTip));
     expect(tips).toHaveLength(1);
-    expect(transfersIn(plan.txs[0]).some(isTip)).toBe(true);
+    expect(transfersIn(plan.txs.at(-1)).some(isTip)).toBe(true);
     const claim = plan.txs.at(-1);
     expect(claim.label).toBe('collect fees');
     expect(claim.simulate).toBe(false);
@@ -242,7 +244,27 @@ describe('planDistribute', () => {
     expect(plan.txs[0].instructions).toContain(sweeps[0].instruction);
     expect(plan.txs[1].instructions).toContain(wide);
     expect(plan.txs[1].simulate).toBe(false);
-    expect(transfersIn(plan.txs[0]).some(isTip)).toBe(true);
+    expect(transfersIn(plan.txs[0]).some(isTip)).toBe(false);
+    expect(transfersIn(plan.txs[1]).filter(isTip)).toHaveLength(1);
+    for (const tx of plan.txs) expect(() => signsAndFits(tx)).not.toThrow();
+  });
+
+  it('falls back to tipping in the sweep transaction when the distribute has no room for it', async () => {
+    const sweeps = await Promise.all([curveSweep(1), curveSweep(2)]);
+    const widest = (n) => new TransactionInstruction({
+      keys: Array.from({ length: n }, () => ({ pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true })),
+      programId: Keypair.generate().publicKey,
+      data: Buffer.alloc(8),
+    });
+    // Find the widest distribute that fits alone but not with the tip beside it.
+    let plan;
+    for (let n = 20; n < 40; n++) {
+      const wide = widest(n);
+      plan = planDistribute({ ...base, distributeInstructions: [...sweeps.map((s) => s.instruction), wide], sweepCount: 2 });
+      if (transfersIn(plan.txs[0]).some(isTip)) break;
+    }
+    expect(transfersIn(plan.txs[0]).filter(isTip)).toHaveLength(1);
+    expect(transfersIn(plan.txs[1]).some(isTip)).toBe(false);
     for (const tx of plan.txs) expect(() => signsAndFits(tx)).not.toThrow();
   });
 });
@@ -277,8 +299,12 @@ describe('planDrainSol', () => {
     expect(plan.txs[0].payer.toBase58()).toBe(funder.publicKey.toBase58());
   });
 
-  it('refuses to drain a wallet into itself', () => {
-    expect(() => planDrainSol({ ...base, from: funder })).toThrow(/different wallet/);
+  it('refuses to pay for the drain from the wallet being drained', () => {
+    expect(() => planDrainSol({ ...base, from: funder })).toThrow(/funder must be a different wallet/);
+  });
+
+  it('refuses a destination that is the exposed wallet itself', () => {
+    expect(() => planDrainSol({ ...base, destination: creator.publicKey })).toThrow(/destination must be a different wallet/);
   });
 
   it('refuses when the balance is already below the keep amount', () => {
@@ -302,10 +328,15 @@ describe('planRescueTokens', () => {
     expect(planRescueTokens({ ...base, tokens: [0, 1, 2, 3].map(token) }).txs).toHaveLength(2);
   });
 
-  it('tips only on the first transaction of the bundle', () => {
+  it('tips only on the last transaction of the bundle', () => {
     const plan = planRescueTokens({ ...base, tokens: [0, 1, 2, 3].map(token) });
-    expect(transfersIn(plan.txs[0]).filter((t) => t.to === tipAccount.toBase58())).toHaveLength(1);
-    expect(transfersIn(plan.txs[1])).toHaveLength(0);
+    expect(transfersIn(plan.txs[0])).toHaveLength(0);
+    expect(transfersIn(plan.txs[1]).filter(isTip)).toHaveLength(1);
+  });
+
+  it('refuses to send the tokens back to the exposed wallet', () => {
+    expect(() => planRescueTokens({ ...base, destinationOwner: creator.publicKey.toBase58(), tokens: [token(0)] }))
+      .toThrow(/destination must be a different wallet/);
   });
 
   it('creates the destination token account idempotently, paid by the funder', () => {
@@ -325,9 +356,9 @@ describe('planRescueTokens', () => {
 
 describe('mergePlans', () => {
   it('concatenates transactions and keeps each summary', () => {
-    const a = planDrainSol({ funder, from: creator, destination, balanceLamports: 2_000_000, tipLamports: TIP, tipAccount });
+    const a = planDrainSol({ funder, from: creator, destination, balanceLamports: 2_000_000, tipLamports: 0, tipAccount });
     const b = planRescueTokens({
-      funder, from: creator, destinationOwner: destination.toBase58(), tipLamports: 0, tipAccount,
+      funder, from: creator, destinationOwner: destination.toBase58(), tipLamports: TIP, tipAccount,
       tokens: [{ mint: Keypair.generate().publicKey.toBase58(), program: TOKEN_PROGRAM_ID.toBase58(), decimals: 6, amountRaw: '1' }],
     });
     const merged = mergePlans(a, b);

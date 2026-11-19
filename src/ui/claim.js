@@ -98,7 +98,9 @@ async function claimAll() {
   const feeLamports = tipLamports();
   const ok = await confirmModal({
     title: 'Claim these fees?',
-    intro: destination ? 'Fees are collected and forwarded in one atomic transaction.' : 'Fees are collected into the creator wallet.',
+    intro: destination
+      ? 'Fees are collected and, in the same atomic transaction, everything this wallet holds in SOL (its balance plus the fees, minus the rent-exempt minimum and network costs) moves to the destination.'
+      : 'Fees are collected into the creator wallet.',
     rows: [
       ['Creator wallet', state.creator],
       ...breakdownRows(fees),

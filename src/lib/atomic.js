@@ -22,11 +22,15 @@ import {
  * A plan is a list of transactions to land atomically in one Jito bundle,
  * plus a human-readable summary the UI shows before anything is signed.
  * Nothing in a plan is signed or sent until `executePlan` runs.
+ *
+ * Every plan tips exactly once, in its last transaction. A bundle is
+ * all-or-nothing, but if one is ever split up on the way to the leader, a tip
+ * at the end can only be paid once everything ahead of it has executed.
  */
 
 const same = (a, b) => a.publicKey.toBase58() === b.publicKey.toBase58();
 const dedupeSigners = (list) => [...new Map(list.map((k) => [k.publicKey.toBase58(), k])).values()];
-/** A zero tip means "this tx rides in a bundle whose first tx already tipped". */
+/** A zero tip means "this plan rides in a bundle whose last plan tips". */
 const maybeTip = (payer, tipAccount, lamports) => (lamports > 0 ? [tipInstruction(payer, tipAccount, lamports)] : []);
 const sumLamports = (rows) => rows.reduce((total, r) => total + r.lamports, 0);
 const describeSweep = ({ venue, mint, address, lamports }) => ({ venue, mint, address, lamports });
@@ -39,7 +43,9 @@ export function networkFeeLamports({ units, signatures = 1, priorityMicroLamport
 /**
  * Launch a coin. If `funder` and `creator` are the same keypair it is one
  * transaction; otherwise Tx1 (funder) forwards rent + dev buy + tip and Tx2
- * (creator) runs createV2, so the creator wallet needs zero SOL beforehand.
+ * (creator) runs createV2 and pays the tip out of what it was forwarded, so
+ * the creator wallet needs zero SOL beforehand and the tip sits in the last
+ * transaction, the same shape as a single-wallet launch.
  */
 export function planLaunch({
   funder, creator, mint, createInstructions, lookupTables = [],
@@ -47,7 +53,6 @@ export function planLaunch({
   priorityMicroLamports = DEFAULT_PRIORITY_MICROLAMPORTS,
 }) {
   const units = CU_CREATE + (devBuyLamports > 0 ? CU_BUY : 0);
-  const tip = maybeTip(funder.publicKey, tipAccount, tipLamports);
   const summary = {
     kind: 'launch',
     mint: mint.publicKey.toBase58(),
@@ -64,7 +69,11 @@ export function planLaunch({
       txs: [{
         label: 'create',
         payer: funder.publicKey,
-        instructions: [...computeBudgetInstructions({ units, priorityMicroLamports }), ...createInstructions, ...tip],
+        instructions: [
+          ...computeBudgetInstructions({ units, priorityMicroLamports }),
+          ...createInstructions,
+          ...maybeTip(funder.publicKey, tipAccount, tipLamports),
+        ],
         signers: [funder, mint],
         lookupTables,
         simulate: true,
@@ -72,25 +81,28 @@ export function planLaunch({
     };
   }
 
-  const forwarded = rentLamports + devBuyLamports;
+  const forwarded = rentLamports + devBuyLamports + tipLamports;
   return {
-    summary: { ...summary, mode: 'funded', forwardedLamports: forwarded, totalLamports: forwarded + tipLamports },
+    summary: { ...summary, mode: 'funded', forwardedLamports: forwarded, totalLamports: forwarded },
     txs: [
       {
-        label: 'fund creator + tip',
+        label: 'fund creator',
         payer: funder.publicKey,
         instructions: [
           ...computeBudgetInstructions({ units: CU_TRANSFER, priorityMicroLamports }),
           SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: creator.publicKey, lamports: forwarded }),
-          ...tip,
         ],
         signers: [funder],
         simulate: true,
       },
       {
-        label: 'create',
+        label: 'create + tip',
         payer: creator.publicKey,
-        instructions: [...computeBudgetInstructions({ units, priorityMicroLamports }), ...createInstructions],
+        instructions: [
+          ...computeBudgetInstructions({ units, priorityMicroLamports }),
+          ...createInstructions,
+          ...maybeTip(creator.publicKey, tipAccount, tipLamports),
+        ],
         signers: [creator, mint],
         lookupTables,
         simulate: false,
@@ -105,11 +117,11 @@ export function planLaunch({
  * never holds a balance a sweeper can take. With `destination` omitted (or equal to the
  * creator) it is a plain claim. Pass the object `buildCollectInstructions` returns.
  *
- * Sweeps go into the claim transaction, largest first, as many as fit. The rest go into
- * sweep-only transactions ahead of it in the bundle (at most `maxTxs` transactions in
- * all); any that still do not fit are left for the next claim and listed in
- * `summary.deferredSweeps`. The claim is simulated on its own only when it does not
- * depend on an earlier transaction in the bundle.
+ * The claim transaction is last and carries the tip. Sweeps go into it, largest first,
+ * as many as fit; the rest go into sweep-only transactions ahead of it in the bundle (at
+ * most `maxTxs` transactions in all); any that still do not fit are left for the next
+ * claim and listed in `summary.deferredSweeps`. The claim is simulated on its own only
+ * when it does not depend on an earlier transaction in the bundle.
  */
 export function planCollect({
   funder, creator, destination = null, collectInstructions,
@@ -128,9 +140,9 @@ export function planCollect({
 
   const claimUnits = (count) => CU_COLLECT + count * CU_SWEEP;
   // A transfer encodes to the same size whatever its amount, so 0 stands in while sizing.
-  const claimInstructions = (count, withTip, drainLamports = 0) => [
+  const claimInstructions = (count, drainLamports = 0) => [
     ...computeBudgetInstructions({ units: claimUnits(count), priorityMicroLamports }),
-    ...(withTip ? tip : []),
+    ...tip,
     ...ordered.slice(0, count).map((s) => s.instruction),
     ...collectInstructions,
     ...(drain ? [SystemProgram.transfer({ fromPubkey: creator.publicKey, toPubkey: dest, lamports: drainLamports })] : []),
@@ -141,25 +153,18 @@ export function planCollect({
     return count;
   };
 
-  let inClaim = mostThatFit(0, (count) => claimInstructions(count, true));
-  const tipInClaim = inClaim === ordered.length || maxTxs === 1;
+  const inClaim = mostThatFit(0, (count) => claimInstructions(count));
   const sweepTxs = [];
-  if (!tipInClaim) {
-    // The first sweep-only transaction carries the tip, so the claim leaves at least one sweep to it.
-    inClaim = Math.min(mostThatFit(0, (count) => claimInstructions(count, false)), ordered.length - 1);
-    let next = inClaim;
-    while (next < ordered.length && sweepTxs.length < maxTxs - 1) {
-      const from = next;
-      const withTip = sweepTxs.length === 0;
-      const build = (count) => [
-        ...computeBudgetInstructions({ units: count * CU_SWEEP, priorityMicroLamports }),
-        ...(withTip ? tip : []),
-        ...ordered.slice(from, from + count).map((s) => s.instruction),
-      ];
-      const count = Math.max(1, mostThatFit(from, build));
-      sweepTxs.push({ sweeps: ordered.slice(from, from + count), instructions: build(count), units: count * CU_SWEEP });
-      next = from + count;
-    }
+  let next = inClaim;
+  while (next < ordered.length && sweepTxs.length < maxTxs - 1) {
+    const from = next;
+    const build = (count) => [
+      ...computeBudgetInstructions({ units: count * CU_SWEEP, priorityMicroLamports }),
+      ...ordered.slice(from, from + count).map((s) => s.instruction),
+    ];
+    const count = Math.max(1, mostThatFit(from, build));
+    sweepTxs.push({ sweeps: ordered.slice(from, from + count), instructions: build(count), units: count * CU_SWEEP });
+    next = from + count;
   }
   const sweptCount = inClaim + sweepTxs.reduce((n, t) => n + t.sweeps.length, 0);
   const included = ordered.slice(0, sweptCount);
@@ -213,7 +218,7 @@ export function planCollect({
       {
         label: 'collect fees',
         payer: funder.publicKey,
-        instructions: claimInstructions(inClaim, tipInClaim, drainLamports),
+        instructions: claimInstructions(inClaim, drainLamports),
         signers: dedupeSigners([funder, creator]),
         lookupTables,
         // A drain sized for fees an earlier transaction sweeps would overdraw in a standalone simulation.
@@ -230,6 +235,7 @@ export function planDrainSol({
 }) {
   if (same(funder, from)) throw new Error('The funder must be a different wallet from the one being drained');
   const dest = new PublicKey(destination);
+  if (dest.equals(from.publicKey)) throw new Error('The destination must be a different wallet from the one being drained');
   const drainLamports = balanceLamports - keepLamports;
   if (drainLamports <= 0) throw new Error('Wallet balance is already below the amount to keep');
   return {
@@ -284,7 +290,8 @@ export async function listTokenAccounts(connection, owner) {
 
 /**
  * Move tokens out of a compromised wallet. Up to 3 tokens per transaction
- * (size budget), up to 5 transactions per bundle, all-or-nothing.
+ * (size budget), up to 5 transactions per bundle, all-or-nothing. The last
+ * transaction carries the tip.
  */
 export function planRescueTokens({
   funder, from, destinationOwner, tokens, tipLamports, tipAccount,
@@ -293,12 +300,12 @@ export function planRescueTokens({
   if (!tokens.length) throw new Error('Select at least one token');
   if (tokens.length > 15) throw new Error('At most 15 tokens per rescue bundle');
   const dest = new PublicKey(destinationOwner);
+  if (dest.equals(from.publicKey)) throw new Error('The destination must be a different wallet from the one being drained');
   const chunks = [];
   for (let i = 0; i < tokens.length; i += 3) chunks.push(tokens.slice(i, i + 3));
 
   const txs = chunks.map((chunk, idx) => {
     const instructions = computeBudgetInstructions({ units: 60_000 * chunk.length, priorityMicroLamports });
-    if (idx === 0) instructions.push(...maybeTip(funder.publicKey, tipAccount, tipLamports));
     for (const t of chunk) {
       const mint = new PublicKey(t.mint);
       const program = new PublicKey(t.program);
@@ -309,6 +316,7 @@ export function planRescueTokens({
         createTransferCheckedInstruction(fromAta, mint, toAta, from.publicKey, BigInt(t.amountRaw), t.decimals, [], program),
       );
     }
+    if (idx === chunks.length - 1) instructions.push(...maybeTip(funder.publicKey, tipAccount, tipLamports));
     return {
       label: `rescue tokens ${idx + 1}/${chunks.length}`,
       payer: funder.publicKey,
@@ -336,6 +344,8 @@ export function planRescueTokens({
  * `distributeInstructions` come from `buildDistributeInstructions`, whose first
  * `sweepCount` instructions sweep the curve and pool. They stay in the distribute
  * transaction when it fits; otherwise they move to a transaction just ahead of it.
+ * The tip rides in the distribute transaction (last) unless that would push it over
+ * the size limit, in which case the sweep transaction carries it.
  */
 export function planDistribute({
   funder, mint, distributeInstructions, sweepCount = 0, vaultLamports, waitingLamports = 0,
@@ -351,21 +361,26 @@ export function planDistribute({
   const tx = (label, instructions, simulate) => ({
     label, payer: funder.publicKey, instructions, signers: [funder], lookupTables, simulate,
   });
-  const split = sweepCount > 0 && !fitsInTransaction({ payer: funder.publicKey, instructions: single, lookupTables });
-  const txs = split
-    ? [
+  const fits = (instructions) => fitsInTransaction({ payer: funder.publicKey, instructions, lookupTables });
+  const split = sweepCount > 0 && !fits(single);
+  let txs = [tx('distribute fees', single, true)];
+  if (split) {
+    const distribute = (withTip) => [
+      ...computeBudgetInstructions({ units: CU_DISTRIBUTE, priorityMicroLamports }),
+      ...distributeInstructions.slice(sweepCount),
+      ...(withTip ? tip : []),
+    ];
+    const tipLast = fits(distribute(true));
+    txs = [
       tx('sweep creator fees', [
         ...computeBudgetInstructions({ units: sweepCount * CU_SWEEP, priorityMicroLamports }),
-        ...tip,
         ...distributeInstructions.slice(0, sweepCount),
+        ...(tipLast ? [] : tip),
       ], true),
       // Simulated alone it would meet the un-swept curve bucket (6095), so only the bundle runs it.
-      tx('distribute fees', [
-        ...computeBudgetInstructions({ units: CU_DISTRIBUTE, priorityMicroLamports }),
-        ...distributeInstructions.slice(sweepCount),
-      ], false),
-    ]
-    : [tx('distribute fees', single, true)];
+      tx('distribute fees', distribute(tipLast), false),
+    ];
+  }
   return {
     summary: {
       kind: 'distribute',
@@ -380,7 +395,7 @@ export function planDistribute({
   };
 }
 
-/** Combine plans into one bundle (max 5 txs). Only the first plan should carry a tip. */
+/** Combine plans into one bundle (max 5 txs). Only the last plan should carry a tip; build the others with `tipLamports: 0`. */
 export function mergePlans(...plans) {
   const txs = plans.flatMap((p) => p.txs);
   if (txs.length > 5) throw new Error(`A bundle holds at most 5 transactions; this needs ${txs.length}`);

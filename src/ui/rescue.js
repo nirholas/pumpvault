@@ -64,6 +64,7 @@ async function rescue() {
   if (!state.funder) return toast('Pick a clean wallet to pay the fee and tip', 'err');
   if (!isPublicKey(state.destination)) return toast('Enter a valid destination address', 'err');
   if (state.funder === state.victim) return toast('The funder must be a different wallet from the compromised one', 'err');
+  if (state.destination === state.victim) return toast('The destination must be a different wallet from the compromised one', 'err');
 
   const victimKp = store.getKeypair(state.victim);
   const funderKp = store.getKeypair(state.funder);
@@ -110,9 +111,9 @@ async function rescue() {
     const tipAccount = await resolveTipAccount();
     const plans = [];
 
-    // The first transaction in the bundle carries the tip; the rest ride along.
-    let tipForNext = tip;
-    const takeTip = () => { const t = tipForNext; tipForNext = 0; return t; };
+    // The last transaction in the bundle carries the tip: the token transfers when there
+    // are any, otherwise the SOL move.
+    const solTip = tokens.length ? 0 : tip;
 
     if (vault > 0) {
       const [claim, lookupTables] = await Promise.all([
@@ -125,14 +126,14 @@ async function rescue() {
         creatorBalanceLamports: balance, lookupTables,
         // Token transfers take 3 per transaction; sweeps get whatever bundle room is left.
         maxTxs: 5 - Math.ceil(tokens.length / 3),
-        tipLamports: takeTip(), tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
+        tipLamports: solTip, tipAccount, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
         priorityMicroLamports: store.getSettings().priorityMicroLamports,
       }));
     } else if (balance > RENT_EXEMPT_MIN_LAMPORTS) {
       plans.push(planDrainSol({
         funder: funderKp, from: victimKp, destination: state.destination,
         balanceLamports: balance, keepLamports: RENT_EXEMPT_MIN_LAMPORTS,
-        tipLamports: takeTip(), tipAccount,
+        tipLamports: solTip, tipAccount,
         priorityMicroLamports: store.getSettings().priorityMicroLamports,
       }));
     }
@@ -140,7 +141,7 @@ async function rescue() {
     if (tokens.length) {
       plans.push(planRescueTokens({
         funder: funderKp, from: victimKp, destinationOwner: state.destination,
-        tokens, tipLamports: takeTip(), tipAccount,
+        tokens, tipLamports: tip, tipAccount,
         priorityMicroLamports: store.getSettings().priorityMicroLamports,
       }));
     }
@@ -215,7 +216,8 @@ function scanResults() {
 
 function render() {
   const wallets = store.listWallets();
-  const canRescue = state.scanned && state.victim && state.funder && state.funder !== state.victim && isPublicKey(state.destination)
+  const canRescue = state.scanned && state.victim && state.funder && state.funder !== state.victim
+    && isPublicKey(state.destination) && state.destination !== state.victim
     && (((state.balance ?? 0) + feesTotal() > RENT_EXEMPT_MIN_LAMPORTS) || selectedTokens().length > 0);
 
   const victimSel = walletSelect({ selected: state.victim, allowNone: true, id: 'victim' });
@@ -264,7 +266,7 @@ function render() {
         el('div', { class: 'form-group' },
           el('label', { class: 'form-label', for: 'dest' }, 'Safe destination'),
           el('input', { class: 'form-input mono', id: 'dest', placeholder: 'Address you control', value: state.destination,
-            onInput: (e) => { state.destination = e.target.value.trim(); const btn = document.getElementById('rescue-btn'); if (btn) btn.disabled = !isPublicKey(state.destination) || !state.scanned; } }),
+            onInput: (e) => { state.destination = e.target.value.trim(); const btn = document.getElementById('rescue-btn'); if (btn) btn.disabled = !isPublicKey(state.destination) || state.destination === state.victim || !state.scanned; } }),
           el('div', { class: 'form-hint' }, 'A fresh wallet whose key has never been shared.'),
           destinationChoices.length
             ? el('div', { class: 'row', style: 'gap:6px;margin-top:6px' },

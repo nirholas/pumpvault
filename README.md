@@ -36,11 +36,11 @@ Every money-moving action is a Jito bundle: a set of transactions that land in o
 | Action | Bundle |
 | --- | --- |
 | Launch (one wallet) | `create` + tip, one transaction |
-| Launch (separate creator) | Tx1: funder sends rent + first buy + tip. Tx2: creator runs `createV2` and pays its own fee, so the creator wallet needs no SOL beforehand |
+| Launch (separate creator) | Tx1: funder sends rent + first buy + tip to the creator. Tx2: creator runs `createV2`, pays its own fee and the tip, so the creator wallet needs no SOL beforehand |
 | Claim | `sweep_creator_fee` for every curve and pool still holding fees, then `collectCoinCreatorFee`, optionally followed by a transfer to a safe wallet in the same transaction. Sweeps that do not fit ride in transactions just ahead of it in the same bundle |
 | Rescue | collect fees, drain SOL, and move tokens, all in one bundle, funded by a clean wallet |
 
-A dropped bundle costs nothing but the network fee. A partial rescue never happens.
+Every bundle tips exactly once, in its last transaction, so a tip is only ever paid alongside the work it pays for. A dropped bundle costs nothing but the network fee. A partial rescue never happens.
 
 ## Quick start
 
