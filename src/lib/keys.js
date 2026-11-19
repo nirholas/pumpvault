@@ -17,7 +17,13 @@ export function parseSecretKey(input, { allowSeed = false } = {}) {
 
   let bytes;
   if (raw.startsWith('[')) {
-    const arr = JSON.parse(raw);
+    let arr;
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      // V8's JSON.parse message quotes the input around the bad token, which here is key material.
+      throw new Error('JSON secret must be an array of bytes');
+    }
     if (!Array.isArray(arr) || arr.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
       throw new Error('JSON secret must be an array of bytes');
     }
@@ -33,7 +39,13 @@ export function parseSecretKey(input, { allowSeed = false } = {}) {
     }
   }
 
-  if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
+  if (bytes.length === 64) {
+    try {
+      return Keypair.fromSecretKey(bytes);
+    } catch {
+      throw new Error('That is not a valid Solana private key: its last 32 bytes do not match the key it encodes');
+    }
+  }
   if (bytes.length === 32) {
     if (allowSeed) return Keypair.fromSeed(bytes);
     throw new Error(

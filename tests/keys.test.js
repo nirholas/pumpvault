@@ -46,6 +46,27 @@ describe('parseSecretKey', () => {
     expect(() => parseSecretKey('definitely not a key')).toThrow(/not base58/i);
   });
 
+  it('never quotes the pasted text in an error, since that text is key material', () => {
+    const bytes = Array.from(kp.secretKey);
+    const malformed = `[${bytes.slice(0, 40).join(',')},oops,${bytes.slice(40).join(',')}]`;
+    let message = '';
+    try {
+      parseSecretKey(malformed);
+    } catch (e) {
+      message = e.message;
+    }
+    expect(message).toBe('JSON secret must be an array of bytes');
+    expect(message).not.toMatch(/\d{2,3},\d{1,3}/);
+  });
+
+  it('rejects 64 bytes whose public half does not match the private half, without echoing them', () => {
+    const tampered = Uint8Array.from(kp.secretKey);
+    tampered[63] ^= 0xff;
+    const encoded = bs58.encode(tampered);
+    expect(() => parseSecretKey(encoded)).toThrow(/not a valid Solana private key/);
+    try { parseSecretKey(encoded); } catch (e) { expect(e.message).not.toContain(encoded.slice(0, 8)); }
+  });
+
   it('rejects a JSON array holding values outside a byte', () => {
     expect(() => parseSecretKey('[1,2,300]')).toThrow(/array of bytes/i);
   });
