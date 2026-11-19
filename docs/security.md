@@ -13,12 +13,14 @@ That means: no server breach can take your funds, and no operator can freeze or 
 | Step | Mechanism |
 | --- | --- |
 | Generation | `Keypair.generate()`, which uses `crypto.getRandomValues` |
-| Key derivation | PBKDF2-SHA256, 310,000 iterations, 16-byte random salt per blob |
+| Key derivation | PBKDF2-SHA256, 600,000 iterations (OWASP's current figure), 16-byte random salt per blob |
 | Encryption | AES-256-GCM, 12-byte random IV per blob |
 | Storage | `localStorage`, ciphertext only |
-| In use | Decrypted into memory while the vault is unlocked |
+| In use | Decrypted into memory while the vault is unlocked; the key bytes are overwritten with zeros on Lock, idle lock, removal and page unload |
 
 Every encryption draws a fresh salt and IV, so the same key encrypted twice produces different ciphertext. GCM is authenticated, so a tampered blob fails to decrypt rather than yielding garbage bytes.
+
+Each blob records its own iteration count. Blobs written by earlier versions (310,000 iterations) still open, and are re-encrypted at the current count the next time the vault is unlocked. A blob claiming fewer than 100,000 or more than 10,000,000 iterations is refused.
 
 ## The session cache, stated plainly
 
@@ -30,7 +32,7 @@ So an unlocked vault writes the passphrase to `sessionStorage`:
 - **Expires after 15 minutes** with no pointer or keyboard activity; a background timer locks the vault when it lapses.
 - **Cleared by Lock**, immediately.
 
-The tradeoff: while a tab is open and unlocked, the plaintext passphrase exists in that tab's `sessionStorage`. Code running in the page could read it. That is a real cost, accepted because code running in the page could equally read the decrypted keys already in memory. If you want the strongest posture, press Lock when you finish, or close the tab.
+The tradeoff: while a tab is open and unlocked, the plaintext passphrase exists in that tab's `sessionStorage`. Code running in the page could read it. Some browsers also write `sessionStorage` to disk as part of session restore, so a crash or an unclean shutdown while unlocked can leave the passphrase in the browser profile. That is a real cost, accepted because code running in the page could equally read the decrypted keys already in memory. If you want the strongest posture, press Lock when you finish, or close the tab.
 
 ## What this does not protect against
 

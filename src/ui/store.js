@@ -1,10 +1,11 @@
 /**
  * Browser-side wallet store. Secret keys live only in localStorage, encrypted
  * with one passphrase (AES-256-GCM, see lib/vault.js). Decrypted keypairs are
- * cached in memory for the session and dropped on lock() or page unload.
+ * cached in memory for the session; on lock() or page unload their secret
+ * bytes are overwritten with zeros, not just dereferenced.
  */
 import { Keypair } from '@solana/web3.js';
-import { decryptSecret, encryptSecret } from '../lib/vault.js';
+import { decryptSecret, encryptSecret, needsRehash } from '../lib/vault.js';
 import { parseSecretKey } from '../lib/keys.js';
 
 const WALLETS_KEY = 'pumpvault.wallets.v1';
@@ -26,7 +27,31 @@ export const IDLE_LOCK_MS = 15 * 60 * 1000;
 
 const listeners = new Set();
 const unlocked = new Map(); // pubkey -> Keypair
+// pubkey -> the Uint8Array the Keypair signs with. Keypair.fromSecretKey keeps a
+// reference to the array it is given, so zeroing it wipes the key from memory.
+const secrets = new Map();
 let sessionPassphrase = null;
+
+function hold(secretBytes) {
+  const keypair = Keypair.fromSecretKey(secretBytes);
+  const pubkey = keypair.publicKey.toBase58();
+  wipe(pubkey);
+  secrets.set(pubkey, secretBytes);
+  unlocked.set(pubkey, keypair);
+  return keypair;
+}
+
+function wipe(pubkey) {
+  secrets.get(pubkey)?.fill(0);
+  secrets.delete(pubkey);
+  unlocked.delete(pubkey);
+}
+
+function wipeAll() {
+  for (const bytes of secrets.values()) bytes.fill(0);
+  secrets.clear();
+  unlocked.clear();
+}
 
 function read(key, fallback) {
   try {
@@ -133,18 +158,51 @@ export async function unlock(passphrase) {
   } else {
     await decryptSecret(check, passphrase); // throws "Wrong passphrase"
   }
+  // Each blob has its own salt, so each needs its own key derivation. WebCrypto runs
+  // them off the main thread, so deriving them concurrently keeps unlock (which runs
+  // on every page load) from scaling with the number of wallets.
+  const wallets = listWallets();
+  const decrypted = await Promise.all(wallets.map((w) => decryptSecret(w.vault, passphrase)));
+  wipeAll();
+  decrypted.forEach((bytes) => hold(bytes));
   sessionPassphrase = passphrase;
   touchSession(passphrase);
-  unlocked.clear();
-  for (const w of listWallets()) {
-    unlocked.set(w.pubkey, Keypair.fromSecretKey(await decryptSecret(w.vault, passphrase)));
-  }
   emit();
+  rehashLegacyBlobs(passphrase, wallets);
+}
+
+/**
+ * Re-encrypt blobs written with an older, weaker PBKDF2 work factor. Runs after
+ * unlock without blocking it. Each blob is replaced only if it is still the one
+ * that was read, so a wallet renamed, removed or added meanwhile is never clobbered.
+ */
+async function rehashLegacyBlobs(passphrase, wallets) {
+  const check = read(CHECK_KEY, null);
+  const stale = wallets.filter((w) => needsRehash(w.vault) && unlocked.has(w.pubkey));
+  if (!stale.length && !needsRehash(check)) return;
+  // Copies taken now, before any await: a lock() meanwhile zeroes the held bytes, and
+  // encrypting those would overwrite a good blob with a zeroed key.
+  const copies = stale.map((w) => unlocked.get(w.pubkey).secretKey);
+  try {
+    const fresh = await Promise.all(copies.map((bytes) => encryptSecret(bytes, passphrase)));
+    if (stale.length) {
+      const replacement = new Map(stale.map((w, i) => [w.pubkey, { from: w.vault, to: fresh[i] }]));
+      write(WALLETS_KEY, listWallets().map((w) => {
+        const r = replacement.get(w.pubkey);
+        return r && JSON.stringify(r.from) === JSON.stringify(w.vault) ? { ...w, vault: r.to } : w;
+      }));
+    }
+    if (needsRehash(check)) localStorage.setItem(CHECK_KEY, JSON.stringify(await encryptSecret(CHECK_PLAINTEXT, passphrase)));
+  } catch {
+    /* the old blobs still decrypt; the next unlock tries again */
+  } finally {
+    for (const bytes of copies) bytes.fill(0);
+  }
 }
 
 export function lock() {
   sessionPassphrase = null;
-  unlocked.clear();
+  wipeAll();
   try { sessionStorage.removeItem(SESSION_KEY); } catch { /* nothing cached */ }
   emit();
 }
@@ -165,9 +223,14 @@ async function persistWallet(keypair, { label, role, compromised = false }) {
   const pubkey = keypair.publicKey.toBase58();
   const wallets = listWallets();
   if (wallets.some((w) => w.pubkey === pubkey)) throw new Error('That wallet is already in your vault');
-  const vault = await encryptSecret(keypair.secretKey, sessionPassphrase);
+  const secretBytes = keypair.secretKey;
+  const vault = await encryptSecret(secretBytes, sessionPassphrase);
+  if (!sessionPassphrase) {
+    secretBytes.fill(0);
+    throw new Error('The vault locked before the wallet was saved');
+  }
   wallets.push({ pubkey, label: label || `${role} wallet ${wallets.length + 1}`, role, compromised, vault, createdAt: Date.now() });
-  unlocked.set(pubkey, keypair);
+  hold(secretBytes);
   write(WALLETS_KEY, wallets);
   if (!localStorage.getItem(ACTIVE_KEY)) setActive(pubkey);
   return pubkey;
@@ -188,7 +251,7 @@ export function updateWallet(pubkey, patch) {
 
 export function removeWallet(pubkey) {
   write(WALLETS_KEY, listWallets().filter((w) => w.pubkey !== pubkey));
-  unlocked.delete(pubkey);
+  wipe(pubkey);
   if (localStorage.getItem(ACTIVE_KEY) === pubkey) localStorage.removeItem(ACTIVE_KEY);
   emit();
 }
@@ -200,7 +263,7 @@ export function recordLaunch(entry) {
   write(LAUNCHES_KEY, [{ ...entry, at: Date.now() }, ...listLaunches()].slice(0, 200));
 }
 
-window.addEventListener('pagehide', () => unlocked.clear());
+window.addEventListener('pagehide', wipeAll);
 for (const evt of ['pointerdown', 'keydown']) {
   window.addEventListener(evt, () => touch(), { passive: true });
 }

@@ -154,7 +154,7 @@ Entry points: `pumpvault` (everything), `pumpvault/keys`, `/vault`, `/jito`, `/p
 ## How keys are handled
 
 - Generated in the browser with `crypto.getRandomValues`, via `@solana/web3.js`.
-- Encrypted with AES-256-GCM under a key derived from your passphrase by PBKDF2-SHA256 (310,000 iterations), each blob with its own salt and IV.
+- Encrypted with AES-256-GCM under a key derived from your passphrase by PBKDF2-SHA256 (600,000 iterations), each blob with its own salt and IV.
 - Stored encrypted in `localStorage`. The plaintext passphrase is cached in `sessionStorage` so moving between pages does not re-prompt; that cache is per-tab, expires after 15 minutes of inactivity, and is cleared by Lock.
 - Never transmitted. Transactions are signed locally and posted straight to Jito's block engine from your browser.
 - The server never receives a key, and there is nothing on it to breach.
